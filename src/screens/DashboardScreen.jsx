@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  ScrollView, RefreshControl,
+  ScrollView, RefreshControl, Dimensions,
 } from 'react-native'
+
+const { width: SCREEN_W } = Dimensions.get('window')
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
 import Toast from 'react-native-toast-message'
@@ -95,10 +97,12 @@ export default function DashboardScreen() {
           </View>
           {loadingWallet
             ? <View style={{ height: 40, justifyContent: 'center' }}><Spinner /></View>
-            : <Text style={s.balanceAmount}>
-                {hideBalance ? '••••••' : Number(wallet?.balance ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                {'  '}<Text style={s.balanceCurrency}>{wallet?.currency ?? 'XOF'}</Text>
-              </Text>
+            : <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                <Text style={s.balanceAmount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+                  {hideBalance ? '••••••' : Number(wallet?.balance ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                </Text>
+                <Text style={s.balanceCurrency}>{wallet?.currency ?? 'XOF'}</Text>
+              </View>
           }
           {!loadingWallet && user?.user_type === 'sender' && (
             <Text style={s.balanceSub}>Diaspora account · {wallet?.currency}</Text>
@@ -166,39 +170,44 @@ export default function DashboardScreen() {
         </View>
       </View>
 
-      <View style={{ height: 24 }} />
+      <View style={{ height: 32 }} />
     </ScrollView>
   )
 }
 
+// 3 columns, 16px horizontal padding each side, 10px gap between
+const GRID_PAD  = 16
+const GRID_GAP  = 10
+const ITEM_W    = Math.floor((SCREEN_W - GRID_PAD * 2 - GRID_GAP * 2) / 3)
+
 const s = StyleSheet.create({
-  header:       { background: undefined, paddingHorizontal: 20, paddingBottom: 28, backgroundColor: '#4F46E5' },
-  headerTop:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 },
+  header:        { paddingHorizontal: 20, paddingBottom: 28, backgroundColor: '#4F46E5' },
+  headerTop:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 },
   headerGreeting:{ fontSize: 13, color: '#A5B4FC' },
-  headerName:   { fontSize: 20, fontWeight: '700', color: '#fff', marginTop: 2 },
-  refreshBtn:   { padding: 8, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.15)' },
-  balanceCard:  { backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 20, padding: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
-  balanceRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  balanceLabel: { fontSize: 12, color: '#A5B4FC', fontWeight: '500' },
-  balanceAmount:{ fontSize: 32, fontWeight: '700', color: '#fff', letterSpacing: -0.5 },
-  balanceCurrency:{ fontSize: 16, fontWeight: '500', color: '#A5B4FC' },
-  balanceSub:   { fontSize: 12, color: '#A5B4FC', marginTop: 2 },
-  section:      { marginTop: 20 },
-  px:           { paddingHorizontal: 20 },
-  quickGrid:    { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 16, gap: 12 },
-  quickItem:    { width: '30%', alignItems: 'center', gap: 8, backgroundColor: '#fff', borderRadius: 16, paddingVertical: 14, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
-  quickIcon:    { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  quickLabel:   { fontSize: 12, fontWeight: '600', color: '#4B5563' },
-  tickerCard:   { backgroundColor: '#fff', borderRadius: 16, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
-  tickerRates:  { flex: 1, flexDirection: 'row', gap: 16 },
-  tickerItem:   { flexDirection: 'row', alignItems: 'center' },
-  tickerCode:   { fontSize: 12, color: '#9CA3AF' },
-  tickerRate:   { fontSize: 12, fontWeight: '700', color: '#1F2937' },
-  tickerCta:    { fontSize: 12, color: '#0D9488', fontWeight: '600' },
-  sectionHeader:{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  sectionTitle: { fontSize: 16, fontWeight: '700', color: '#111827' },
-  seeAll:       { fontSize: 13, color: '#4F46E5', fontWeight: '600' },
-  card:         { backgroundColor: '#fff', borderRadius: 20, padding: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
-  divider:      { height: 1, backgroundColor: '#F9FAFB', marginVertical: 2 },
-  empty:        { textAlign: 'center', color: '#9CA3AF', fontSize: 14, paddingVertical: 24 },
+  headerName:    { fontSize: 20, fontWeight: '700', color: '#fff', marginTop: 2 },
+  refreshBtn:    { padding: 8, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.15)' },
+  balanceCard:   { backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 20, padding: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+  balanceRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  balanceLabel:  { fontSize: 12, color: '#A5B4FC', fontWeight: '500' },
+  balanceAmount: { fontSize: 30, fontWeight: '700', color: '#fff', letterSpacing: -0.5, flexShrink: 1 },
+  balanceCurrency:{ fontSize: 15, fontWeight: '500', color: '#A5B4FC' },
+  balanceSub:    { fontSize: 12, color: '#A5B4FC', marginTop: 2 },
+  section:       { marginTop: 20 },
+  px:            { paddingHorizontal: 20 },
+  quickGrid:     { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: GRID_PAD, gap: GRID_GAP },
+  quickItem:     { width: ITEM_W, alignItems: 'center', gap: 8, backgroundColor: '#fff', borderRadius: 16, paddingVertical: 14, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
+  quickIcon:     { width: 42, height: 42, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  quickLabel:    { fontSize: 11, fontWeight: '600', color: '#4B5563', textAlign: 'center' },
+  tickerCard:    { backgroundColor: '#fff', borderRadius: 16, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
+  tickerRates:   { flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  tickerItem:    { flexDirection: 'row', alignItems: 'center' },
+  tickerCode:    { fontSize: 12, color: '#9CA3AF' },
+  tickerRate:    { fontSize: 12, fontWeight: '700', color: '#1F2937' },
+  tickerCta:     { fontSize: 12, color: '#0D9488', fontWeight: '600' },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  sectionTitle:  { fontSize: 16, fontWeight: '700', color: '#111827' },
+  seeAll:        { fontSize: 13, color: '#4F46E5', fontWeight: '600' },
+  card:          { backgroundColor: '#fff', borderRadius: 20, padding: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
+  divider:       { height: 1, backgroundColor: '#F9FAFB', marginVertical: 2 },
+  empty:         { textAlign: 'center', color: '#9CA3AF', fontSize: 14, paddingVertical: 24 },
 })

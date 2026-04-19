@@ -3,17 +3,17 @@ import {
   View, Text, TextInput, TouchableOpacity,
   StyleSheet, KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute } from '@react-navigation/native'
 import Toast from 'react-native-toast-message'
 import { ShieldCheck } from 'lucide-react-native'
 import api from '../api/client'
-import { useAuth } from '../context/AuthContext'
 import Spinner from '../components/Spinner'
 
 export default function VerifyOTPScreen() {
+  const insets = useSafeAreaInsets()
   const navigation = useNavigation()
   const route = useRoute()
-  const { saveSession } = useAuth()
   const params = route.params || {}
   const [digits, setDigits] = useState(['', '', '', '', '', ''])
   const [loading, setLoading] = useState(false)
@@ -55,9 +55,18 @@ export default function VerifyOTPScreen() {
         full_name:     params.full_name     || '',
         home_country:  params.home_country  || '',
       })
-      await saveSession(data.token, { id: data.user_id, phone_number: params.phone_number })
       Toast.show({ type: 'success', text1: 'Account created! Set your PIN.' })
-      navigation.navigate('SetPIN')
+      navigation.navigate('SetPIN', {
+        token: data.token,
+        user: {
+          id: data.user_id,
+          phone_number: params.phone_number,
+          full_name:     params.full_name     || '',
+          user_type:     params.user_type     || 'receiver',
+          home_country:  params.home_country  || '',
+          home_currency: params.home_currency || '',
+        },
+      })
     } catch (err) {
       Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Invalid OTP' })
     } finally {
@@ -66,8 +75,8 @@ export default function VerifyOTPScreen() {
   }
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={s.container} keyboardShouldPersistTaps="handled">
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: '#F9FAFB' }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView contentContainerStyle={[s.container, { paddingTop: insets.top + 32, paddingBottom: insets.bottom + 24 }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         <View style={s.iconWrap}>
           <View style={s.iconBox}>
             <ShieldCheck size={32} color="#fff" />
@@ -103,7 +112,7 @@ export default function VerifyOTPScreen() {
 }
 
 const s = StyleSheet.create({
-  container:   { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingVertical: 48, backgroundColor: '#F9FAFB' },
+  container:   { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24 },
   iconWrap:    { alignItems: 'center', marginBottom: 40 },
   iconBox:     { width: 64, height: 64, backgroundColor: '#22C55E', borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
   title:       { fontSize: 24, fontWeight: '700', color: '#111827' },

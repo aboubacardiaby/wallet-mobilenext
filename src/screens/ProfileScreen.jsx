@@ -154,7 +154,7 @@ export default function ProfileScreen() {
           <Text style={s.logoutText}>Sign Out</Text>
         </TouchableOpacity>
       </View>
-      <View style={{ height: 32 }} />
+      <View style={{ height: insets.bottom + 24 }} />
     </ScrollView>
   )
 }

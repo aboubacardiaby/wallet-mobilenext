@@ -9,6 +9,7 @@ import Toast from 'react-native-toast-message'
 import { ArrowLeft, CreditCard, Building2, Star, Trash2, Plus, X, Smartphone } from 'lucide-react-native'
 import api from '../api/client'
 import Spinner from '../components/Spinner'
+import { useAuth } from '../context/AuthContext'
 
 const BRAND_LOGO = {
   visa:       { text: 'VISA', bg: '#1D4ED8', fg: '#fff' },
@@ -18,9 +19,10 @@ const BRAND_LOGO = {
   unknown:    { text: '💳',   bg: '#E5E7EB', fg: '#374151' },
 }
 
-const FORM_TABS = [
+const BASE_FORM_TABS = [
   { id: 'card',          label: 'Card',      icon: '💳' },
   { id: 'bank_transfer', label: 'Bank',      icon: '🏦' },
+  { id: 'ach',           label: 'ACH',       icon: '🏛️' },
   { id: 'paypal',        label: 'PayPal',    icon: '🅿️' },
   { id: 'apple_pay',     label: 'Apple Pay', icon: '🍎' },
   { id: 'google_pay',    label: 'Google Pay',icon: '🇬' },
@@ -49,6 +51,9 @@ function formatExpiry(raw) {
 export default function PaymentMethodsScreen() {
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
+  const { user } = useAuth()
+  const isUSUser = user?.home_country === 'United States'
+  const FORM_TABS = isUSUser ? BASE_FORM_TABS : BASE_FORM_TABS.filter(t => t.id !== 'ach')
   const [methods, setMethods] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
@@ -122,6 +127,7 @@ export default function PaymentMethodsScreen() {
                 </View>
                 {activeTab === 'card' && <AddCardForm onDone={() => { setShowAdd(false); load() }} />}
                 {activeTab === 'bank_transfer' && <AddBankForm onDone={() => { setShowAdd(false); load() }} />}
+                {activeTab === 'ach' && <AddACHForm onDone={() => { setShowAdd(false); load() }} />}
                 {activeTab === 'paypal' && <AddPayPalForm onDone={() => { setShowAdd(false); load() }} />}
                 {(activeTab === 'apple_pay' || activeTab === 'google_pay') && <AddDigitalWalletForm type={activeTab} onDone={() => { setShowAdd(false); load() }} />}
               </View>
@@ -255,6 +261,58 @@ function AddBankForm({ onDone }) {
   )
 }
 
+function AddACHForm({ onDone }) {
+  const [holderName, setHolderName] = useState('')
+  const [routingNumber, setRoutingNumber] = useState('')
+  const [accountNumber, setAccountNumber] = useState('')
+  const [accountType, setAccountType] = useState('checking')
+  const [isDefault, setIsDefault] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  const submit = async () => {
+    if (routingNumber.length !== 9) return Toast.show({ type: 'error', text1: 'Routing number must be 9 digits' })
+    if (!accountNumber) return Toast.show({ type: 'error', text1: 'Account number is required' })
+    setSaving(true)
+    try {
+      await api.post('/payment-methods/ach', {
+        holder_name: holderName,
+        routing_number: routingNumber,
+        account_number: accountNumber,
+        account_type: accountType,
+        set_default: isDefault,
+      })
+      Toast.show({ type: 'success', text1: 'ACH account added!' })
+      onDone()
+    } catch (err) {
+      Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Failed to add ACH account' })
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <View style={{ gap: 10 }}>
+      <View style={sF.infoBanner}>
+        <Text style={{ fontSize: 20 }}>🏛️</Text>
+        <Text style={sF.infoText}>Link your US bank account via ACH for direct bank transfers.</Text>
+      </View>
+      <TextInput style={sF.input} placeholder="Account holder name" placeholderTextColor="#9CA3AF" value={holderName} onChangeText={setHolderName} />
+      <TextInput style={sF.input} placeholder="Routing number (9 digits)" placeholderTextColor="#9CA3AF" keyboardType="number-pad" maxLength={9} value={routingNumber} onChangeText={v => setRoutingNumber(v.replace(/\D/g, '').slice(0, 9))} />
+      <TextInput style={sF.input} placeholder="Account number" placeholderTextColor="#9CA3AF" keyboardType="number-pad" value={accountNumber} onChangeText={v => setAccountNumber(v.replace(/\D/g, ''))} />
+      <View style={sF.segmentRow}>
+        <TouchableOpacity style={[sF.segment, accountType === 'checking' && sF.segmentActive]} onPress={() => setAccountType('checking')}>
+          <Text style={[sF.segmentText, accountType === 'checking' && sF.segmentTextActive]}>Checking</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[sF.segment, accountType === 'savings' && sF.segmentActive]} onPress={() => setAccountType('savings')}>
+          <Text style={[sF.segmentText, accountType === 'savings' && sF.segmentTextActive]}>Savings</Text>
+        </TouchableOpacity>
+      </View>
+      <View style={sF.switchRow}><Text style={sF.switchLabel}>Set as default</Text><Switch value={isDefault} onValueChange={setIsDefault} trackColor={{ true: '#4F46E5' }} /></View>
+      <TouchableOpacity style={[sF.btn, saving && sF.btnDisabled]} onPress={submit} disabled={saving}>
+        {saving ? <Spinner size="sm" color="#fff" /> : <Text style={sF.btnText}>Add ACH Account</Text>}
+      </TouchableOpacity>
+    </View>
+  )
+}
+
 function AddPayPalForm({ onDone }) {
   const [email, setEmail] = useState('')
   const [isDefault, setIsDefault] = useState(false)
@@ -361,4 +419,9 @@ const sF = StyleSheet.create({
   walletBanner:{ alignItems: 'center', gap: 6, backgroundColor: '#F9FAFB', borderRadius: 14, padding: 16 },
   walletTitle: { fontSize: 16, fontWeight: '700', color: '#111827' },
   walletSub:   { fontSize: 12, color: '#9CA3AF', textAlign: 'center' },
+  segmentRow:  { flexDirection: 'row', backgroundColor: '#F3F4F6', borderRadius: 10, padding: 3, gap: 3 },
+  segment:     { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8 },
+  segmentActive:{ backgroundColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 2, elevation: 1 },
+  segmentText: { fontSize: 13, fontWeight: '600', color: '#9CA3AF' },
+  segmentTextActive: { color: '#4F46E5' },
 })

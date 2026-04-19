@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity,
-  StyleSheet, ScrollView, KeyboardAvoidingView, Platform, FlatList,
+  StyleSheet, ScrollView, KeyboardAvoidingView, Platform,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
 import Toast from 'react-native-toast-message'
-import { ArrowLeft, ArrowRight, Globe } from 'lucide-react-native'
+import { ArrowLeft, ArrowRight, Globe, CheckCircle } from 'lucide-react-native'
 import api from '../api/client'
 import Spinner from '../components/Spinner'
 
@@ -56,6 +57,7 @@ const CURRENCY_SYMBOLS = {
 
 export default function RegisterScreen() {
   const navigation = useNavigation()
+  const insets = useSafeAreaInsets()
   const [step, setStep] = useState(0)
   const [userType, setUserType] = useState(null)
   const [selectedCountry, setSelectedCountry] = useState(null)
@@ -66,6 +68,8 @@ export default function RegisterScreen() {
   const countries = userType === 'sender' ? SENDER_COUNTRIES : RECEIVER_COUNTRIES
 
   const submit = async () => {
+    if (!fullName.trim()) return Toast.show({ type: 'error', text1: 'Enter your full name' })
+    if (!phoneNumber.trim()) return Toast.show({ type: 'error', text1: 'Enter your phone number' })
     setLoading(true)
     try {
       const phone = (selectedCountry.dial + phoneNumber).replace(/\s/g, '')
@@ -90,20 +94,31 @@ export default function RegisterScreen() {
     }
   }
 
-  // Step 0: Role selection
+  // ── Step 0: Role selection ─────────────────────────────────────────────────
   if (step === 0) {
     return (
-      <View style={s.container}>
+      <ScrollView
+        style={{ flex: 1, backgroundColor: '#F9FAFB' }}
+        contentContainerStyle={[s.container, { paddingTop: insets.top + 32, paddingBottom: insets.bottom + 24 }]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
         <View style={s.logoWrap}>
           <View style={[s.iconBox, { backgroundColor: '#4F46E5' }]}>
-            <Globe size={30} color="#fff" />
+            <Globe size={32} color="#fff" />
           </View>
-          <Text style={s.title}>Welcome</Text>
+          <Text style={s.title}>Create Account</Text>
           <Text style={s.sub}>How will you use Kalipeh?</Text>
         </View>
 
-        <TouchableOpacity style={s.roleCard} onPress={() => { setUserType('sender'); setStep(1) }}>
-          <Text style={s.roleIcon}>✈️</Text>
+        <TouchableOpacity
+          style={s.roleCard}
+          onPress={() => { setUserType('sender'); setStep(1) }}
+          activeOpacity={0.85}
+        >
+          <View style={[s.roleIconWrap, { backgroundColor: '#EEF2FF' }]}>
+            <Text style={s.roleEmoji}>✈️</Text>
+          </View>
           <View style={s.roleInfo}>
             <Text style={s.roleTitle}>I'm sending money</Text>
             <Text style={s.roleSub}>From North America or Europe to Africa</Text>
@@ -111,11 +126,17 @@ export default function RegisterScreen() {
           <View style={[s.badge, { backgroundColor: '#EEF2FF' }]}>
             <Text style={[s.badgeText, { color: '#4338CA' }]}>Diaspora</Text>
           </View>
-          <ArrowRight size={16} color="#D1D5DB" />
+          <ArrowRight size={16} color="#C7D2FE" />
         </TouchableOpacity>
 
-        <TouchableOpacity style={s.roleCard} onPress={() => { setUserType('receiver'); setStep(1) }}>
-          <Text style={s.roleIcon}>🌍</Text>
+        <TouchableOpacity
+          style={s.roleCard}
+          onPress={() => { setUserType('receiver'); setStep(1) }}
+          activeOpacity={0.85}
+        >
+          <View style={[s.roleIconWrap, { backgroundColor: '#F0FDF4' }]}>
+            <Text style={s.roleEmoji}>🌍</Text>
+          </View>
           <View style={s.roleInfo}>
             <Text style={s.roleTitle}>I'm receiving money</Text>
             <Text style={s.roleSub}>I'm based in Africa</Text>
@@ -123,36 +144,41 @@ export default function RegisterScreen() {
           <View style={[s.badge, { backgroundColor: '#F0FDF4' }]}>
             <Text style={[s.badgeText, { color: '#166534' }]}>Africa</Text>
           </View>
-          <ArrowRight size={16} color="#D1D5DB" />
+          <ArrowRight size={16} color="#BBF7D0" />
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={() => navigation.navigate('Login')}>
+        <TouchableOpacity onPress={() => navigation.navigate('Login')} style={s.linkWrap}>
           <Text style={s.linkText}>Already have an account? <Text style={s.link}>Sign In</Text></Text>
         </TouchableOpacity>
-      </View>
+      </ScrollView>
     )
   }
 
-  // Step 1: Country selection
+  // ── Step 1: Country selection ──────────────────────────────────────────────
   if (step === 1) {
     return (
       <View style={{ flex: 1, backgroundColor: '#F9FAFB' }}>
-        <View style={s.topBar}>
+        <View style={[s.topBar, { paddingTop: insets.top + 12 }]}>
           <TouchableOpacity onPress={() => setStep(0)} style={s.backBtn}>
-            <ArrowLeft size={16} color="#9CA3AF" />
-            <Text style={s.backText}>Back</Text>
+            <ArrowLeft size={18} color="#374151" />
           </TouchableOpacity>
-          <Text style={s.stepTitle}>{userType === 'sender' ? 'Where are you sending from?' : 'Where are you based?'}</Text>
-          <Text style={s.stepSub}>Select your country</Text>
+          <View style={{ flex: 1, paddingLeft: 12 }}>
+            <Text style={s.stepTitle}>
+              {userType === 'sender' ? 'Where are you based?' : 'Where are you based?'}
+            </Text>
+            <Text style={s.stepSub}>Select your country</Text>
+          </View>
         </View>
-        <FlatList
-          data={countries}
-          keyExtractor={c => c.name}
-          contentContainerStyle={{ padding: 16, gap: 8 }}
-          renderItem={({ item: c }) => (
+        <ScrollView
+          contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 24, gap: 8 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {countries.map(c => (
             <TouchableOpacity
+              key={c.name}
               style={s.countryRow}
               onPress={() => { setSelectedCountry(c); setStep(2) }}
+              activeOpacity={0.85}
             >
               <Text style={s.flag}>{c.flag}</Text>
               <View style={{ flex: 1 }}>
@@ -163,59 +189,71 @@ export default function RegisterScreen() {
                 <Text style={s.currencyText}>{CURRENCY_SYMBOLS[c.currency] || c.currency} {c.currency}</Text>
               </View>
             </TouchableOpacity>
-          )}
-        />
+          ))}
+        </ScrollView>
       </View>
     )
   }
 
-  // Step 2: Name + Phone
+  // ── Step 2: Name + Phone ───────────────────────────────────────────────────
   return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={s.container} keyboardShouldPersistTaps="handled">
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: '#F9FAFB' }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView
+        contentContainerStyle={[s.container, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 24 }]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
         <TouchableOpacity onPress={() => setStep(1)} style={s.backBtn}>
-          <ArrowLeft size={16} color="#9CA3AF" />
-          <Text style={s.backText}>Back</Text>
+          <ArrowLeft size={18} color="#374151" />
         </TouchableOpacity>
 
         <View style={s.countryHeader}>
-          <Text style={{ fontSize: 32 }}>{selectedCountry?.flag}</Text>
-          <View>
+          <Text style={{ fontSize: 40 }}>{selectedCountry?.flag}</Text>
+          <View style={{ flex: 1 }}>
             <Text style={s.title}>Create Account</Text>
             <Text style={s.sub}>{selectedCountry?.name} · {selectedCountry?.currency}</Text>
           </View>
         </View>
 
-        <Text style={s.label}>Full Name</Text>
-        <TextInput style={s.input} placeholder="Your full name" placeholderTextColor="#9CA3AF" value={fullName} onChangeText={setFullName} />
-
-        <Text style={[s.label, { marginTop: 16 }]}>Phone Number</Text>
-        <View style={s.phoneRow}>
-          <View style={s.dialBox}>
-            <Text style={s.dialText}>{selectedCountry?.dial}</Text>
-          </View>
+        <View style={s.card}>
+          <Text style={s.label}>Full Name</Text>
           <TextInput
-            style={[s.input, { flex: 1, marginLeft: 8 }]}
-            placeholder="770000000"
+            style={s.input}
+            placeholder="Your full name"
             placeholderTextColor="#9CA3AF"
-            keyboardType="phone-pad"
-            value={phoneNumber}
-            onChangeText={setPhoneNumber}
+            value={fullName}
+            onChangeText={setFullName}
+            autoCapitalize="words"
           />
+
+          <Text style={[s.label, { marginTop: 18 }]}>Phone Number</Text>
+          <View style={s.phoneRow}>
+            <View style={s.dialBox}>
+              <Text style={s.dialText}>{selectedCountry?.dial}</Text>
+            </View>
+            <TextInput
+              style={[s.input, s.phoneInput]}
+              placeholder="770000000"
+              placeholderTextColor="#9CA3AF"
+              keyboardType="phone-pad"
+              value={phoneNumber}
+              onChangeText={setPhoneNumber}
+            />
+          </View>
+          <Text style={s.hint}>Full: {selectedCountry?.dial}{phoneNumber}</Text>
+
+          <TouchableOpacity style={[s.btn, loading && s.btnDisabled]} onPress={submit} disabled={loading}>
+            {loading
+              ? <Spinner size="sm" color="#fff" />
+              : <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={s.btnText}>Send OTP</Text>
+                  <ArrowRight size={16} color="#fff" />
+                </View>
+            }
+          </TouchableOpacity>
         </View>
-        <Text style={s.hint}>Full number: {selectedCountry?.dial}{phoneNumber}</Text>
 
-        <TouchableOpacity style={[s.btn, loading && s.btnDisabled]} onPress={submit} disabled={loading}>
-          {loading
-            ? <Spinner size="sm" color="#fff" />
-            : <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Text style={s.btnText}>Send OTP</Text>
-                <ArrowRight size={16} color="#fff" />
-              </View>
-          }
-        </TouchableOpacity>
-
-        <TouchableOpacity onPress={() => navigation.navigate('Login')} style={{ marginTop: 16 }}>
+        <TouchableOpacity onPress={() => navigation.navigate('Login')} style={s.linkWrap}>
           <Text style={s.linkText}>Already have an account? <Text style={s.link}>Sign In</Text></Text>
         </TouchableOpacity>
       </ScrollView>
@@ -224,39 +262,42 @@ export default function RegisterScreen() {
 }
 
 const s = StyleSheet.create({
-  container:    { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingVertical: 40, backgroundColor: '#F9FAFB' },
-  logoWrap:     { alignItems: 'center', marginBottom: 40 },
-  iconBox:      { width: 64, height: 64, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
-  title:        { fontSize: 24, fontWeight: '700', color: '#111827' },
+  container:    { flexGrow: 1, paddingHorizontal: 20 },
+  logoWrap:     { alignItems: 'center', marginBottom: 32, marginTop: 8 },
+  iconBox:      { width: 72, height: 72, borderRadius: 24, alignItems: 'center', justifyContent: 'center', marginBottom: 16, shadowColor: '#4F46E5', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.3, shadowRadius: 16, elevation: 8 },
+  title:        { fontSize: 26, fontWeight: '800', color: '#111827', letterSpacing: -0.5 },
   sub:          { fontSize: 14, color: '#6B7280', marginTop: 4 },
-  topBar:       { paddingHorizontal: 20, paddingTop: 56, paddingBottom: 16 },
-  backBtn:      { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 16 },
-  backText:     { fontSize: 14, color: '#9CA3AF' },
-  stepTitle:    { fontSize: 20, fontWeight: '700', color: '#111827' },
-  stepSub:      { fontSize: 13, color: '#9CA3AF', marginTop: 4 },
-  roleCard:     { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 2, borderColor: '#F3F4F6' },
-  roleIcon:     { fontSize: 28, width: 40, textAlign: 'center' },
+  topBar:       { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12 },
+  backBtn:      { width: 38, height: 38, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  stepTitle:    { fontSize: 18, fontWeight: '700', color: '#111827' },
+  stepSub:      { fontSize: 13, color: '#9CA3AF', marginTop: 2 },
+  roleCard:     { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderRadius: 18, padding: 16, marginBottom: 12, borderWidth: 1.5, borderColor: '#F3F4F6', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
+  roleIconWrap: { width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  roleEmoji:    { fontSize: 24 },
   roleInfo:     { flex: 1 },
   roleTitle:    { fontSize: 15, fontWeight: '700', color: '#111827' },
   roleSub:      { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
-  badge:        { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 },
-  badgeText:    { fontSize: 11, fontWeight: '600' },
+  badge:        { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999 },
+  badgeText:    { fontSize: 11, fontWeight: '700' },
   countryRow:   { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderRadius: 16, padding: 14, borderWidth: 1, borderColor: '#F3F4F6' },
-  flag:         { fontSize: 24, width: 32, textAlign: 'center' },
+  flag:         { fontSize: 26, width: 34, textAlign: 'center' },
   countryName:  { fontSize: 14, fontWeight: '600', color: '#111827' },
-  dial:         { fontSize: 12, color: '#9CA3AF' },
-  currencyBadge:{ backgroundColor: '#EEF2FF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 },
+  dial:         { fontSize: 12, color: '#9CA3AF', marginTop: 1 },
+  currencyBadge:{ backgroundColor: '#EEF2FF', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999 },
   currencyText: { fontSize: 11, fontWeight: '700', color: '#4F46E5' },
-  countryHeader:{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 24 },
-  label:        { fontSize: 14, fontWeight: '500', color: '#374151', marginBottom: 6 },
-  input:        { backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 13, fontSize: 15, color: '#111827' },
-  phoneRow:     { flexDirection: 'row', alignItems: 'center' },
-  dialBox:      { backgroundColor: '#F9FAFB', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 13, alignItems: 'center', justifyContent: 'center', minWidth: 80 },
-  dialText:     { fontSize: 14, fontWeight: '600', color: '#6B7280' },
+  countryHeader:{ flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 24, marginTop: 16 },
+  card:         { backgroundColor: '#fff', borderRadius: 24, padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 12, elevation: 3, marginBottom: 20 },
+  label:        { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 8 },
+  input:        { backgroundColor: '#F9FAFB', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14, fontSize: 15, color: '#111827' },
+  phoneRow:     { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  phoneInput:   { flex: 1 },
+  dialBox:      { backgroundColor: '#F9FAFB', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 14, alignItems: 'center', justifyContent: 'center', minWidth: 76 },
+  dialText:     { fontSize: 14, fontWeight: '600', color: '#374151' },
   hint:         { fontSize: 12, color: '#9CA3AF', marginTop: 6 },
-  btn:          { backgroundColor: '#4F46E5', borderRadius: 14, paddingVertical: 15, alignItems: 'center', marginTop: 24 },
+  btn:          { backgroundColor: '#4F46E5', borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 24, shadowColor: '#4F46E5', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 5 },
   btnDisabled:  { opacity: 0.7 },
   btnText:      { color: '#fff', fontSize: 16, fontWeight: '700' },
-  linkText:     { textAlign: 'center', fontSize: 14, color: '#6B7280' },
+  linkWrap:     { alignItems: 'center' },
+  linkText:     { fontSize: 14, color: '#6B7280' },
   link:         { color: '#4F46E5', fontWeight: '700' },
 })

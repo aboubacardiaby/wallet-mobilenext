@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ScrollView, KeyboardAvoidingView, Platform, FlatList, Alert,
+  ScrollView, KeyboardAvoidingView, Platform, Alert,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute } from '@react-navigation/native'
 import Toast from 'react-native-toast-message'
 import {
   ArrowLeft, Send, Users, ChevronDown,
-  CheckCircle, MapPin, Zap, RefreshCw, CreditCard, Wallet,
+  CheckCircle, MapPin, Zap, RefreshCw, CreditCard, Wallet, Building2,
 } from 'lucide-react-native'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
@@ -47,6 +47,64 @@ const CURRENCY_FLAGS = {
 }
 const FEE_RATE = 0.015
 
+function formatCardNumber(raw) {
+  return raw.replace(/\D/g, '').slice(0, 16).replace(/(.{4})/g, '$1 ').trim()
+}
+function formatExpiry(raw) {
+  const d = raw.replace(/\D/g, '').slice(0, 4)
+  return d.length > 2 ? `${d.slice(0, 2)}/${d.slice(2)}` : d
+}
+
+// ── Notification helpers ──────────────────────────────────────────────────────
+// All fire-and-forget: notification failure must never block the transfer UX.
+
+// 1. Sender receipt — email + in-app notification for the person who sent money
+async function notifySender(transferData) {
+  const type = transferData.pickup_code ? 'cash_pickup' : transferData.wave_ref ? 'wave' : 'wallet'
+  try {
+    await Promise.all([
+      // Email receipt to sender
+      api.post('/notifications/transfer-email', {
+        recipient_type:   'sender',
+        transfer_type:    type,
+        transaction_ref:  transferData.transaction_ref,
+        send_amount:      transferData.send_amount,
+        send_currency:    transferData.send_currency,
+        fee:              transferData.fee,
+        received_amount:  transferData.received_amount,
+        recv_currency:    transferData.recv_currency,
+        recipient_name:   transferData.recipient_name,
+        exchange_rate:    transferData.exchange_rate,
+        pickup_code:      transferData.pickup_code || null,
+      }),
+      // In-app notification for sender
+      api.post('/notifications', {
+        type:    'transaction',
+        title:   'Transfer sent ✓',
+        message: `${transferData.send_amount} ${transferData.send_currency} sent to ${transferData.recipient_name || 'recipient'}. Ref: ${(transferData.transaction_ref || '').slice(0, 12)}…`,
+      }),
+    ])
+  } catch { /* silent */ }
+}
+
+// 2. Recipient notification — SMS/email + PIN for cash pickup
+async function notifyRecipient(transferData, toPhone) {
+  const type = transferData.pickup_code ? 'cash_pickup' : transferData.wave_ref ? 'wave' : 'wallet'
+  try {
+    await api.post('/notifications/recipient-notify', {
+      to_phone:        toPhone,
+      transfer_type:   type,
+      transaction_ref: transferData.transaction_ref,
+      received_amount: transferData.received_amount,
+      recv_currency:   transferData.recv_currency,
+      sender_name:     transferData.sender_name || null,
+      // PIN sent to recipient only for cash pickup
+      pickup_code:     transferData.pickup_code || null,
+      wave_ref:        transferData.wave_ref    || null,
+    })
+  } catch { /* silent */ }
+}
+
 function fmt(n, ccy) {
   if (n == null || isNaN(n)) return '—'
   const sym = CURRENCY_SYMBOLS[ccy] || ccy
@@ -68,7 +126,18 @@ export default function SendMoneyScreen() {
   const [showCountryPicker, setShowCountryPicker] = useState(false)
   const [recipients, setRecipients] = useState([])
   const [paymentMethods, setPaymentMethods] = useState([])
-  const [selectedPmId, setSelectedPmId] = useState('wallet')
+  const [paymentType, setPaymentType] = useState('wallet') // 'wallet' | 'card' | 'ach'
+  const [selectedPmId, setSelectedPmId] = useState(null) // id of a saved PM, or null for inline entry
+  // Inline card fields
+  const [cardNumber, setCardNumber] = useState('')
+  const [cardExpiry, setCardExpiry] = useState('')
+  const [cardCvv, setCardCvv] = useState('')
+  const [cardName, setCardName] = useState('')
+  // Inline ACH fields
+  const [achRouting, setAchRouting] = useState('')
+  const [achAccount, setAchAccount] = useState('')
+  const [achHolder, setAchHolder] = useState('')
+  const [achType, setAchType] = useState('checking')
   const [liveRate, setLiveRate] = useState(null)
   const [rateLoading, setRateLoading] = useState(false)
   const [quote, setQuote] = useState(null)
@@ -77,6 +146,22 @@ export default function SendMoneyScreen() {
   const [waveCheckLoading, setWaveCheckLoading] = useState(false)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
+
+  const savedCards = paymentMethods.filter(m => m.type === 'card')
+  const savedACH   = paymentMethods.filter(m => m.type === 'ach' || m.type === 'bank_transfer')
+
+  const switchPaymentType = (type) => {
+    setPaymentType(type)
+    if (type === 'wallet') {
+      setSelectedPmId(null)
+    } else if (type === 'card') {
+      const def = savedCards.find(m => m.is_default) || savedCards[0]
+      setSelectedPmId(def?.id || null)
+    } else if (type === 'ach') {
+      const def = savedACH.find(m => m.is_default) || savedACH[0]
+      setSelectedPmId(def?.id || null)
+    }
+  }
 
   const senderCcy = wallet?.currency || (isSender ? 'USD' : 'XOF')
   const destCcy = destCountry.currency
@@ -99,13 +184,11 @@ export default function SendMoneyScreen() {
   useEffect(() => {
     api.get('/wallet/balance').then(({ data }) => setWallet(data)).catch(() => {})
     api.get('/user/recipients').then(({ data }) => setRecipients(data.recipients || [])).catch(() => {})
-    if (isSender) {
-      api.get('/payment-methods').then(({ data }) => {
-        setPaymentMethods(data.payment_methods || [])
-        const def = (data.payment_methods || []).find(m => m.is_default)
-        if (def) setSelectedPmId(def.id)
-      }).catch(() => {})
-    }
+    api.get('/payment-methods').then(({ data }) => {
+      setPaymentMethods(data.payment_methods || [])
+      const def = (data.payment_methods || []).find(m => m.is_default)
+      if (def) setSelectedPmId(def.id)
+    }).catch(() => {})
   }, [])
 
   const fetchQuote = useCallback(async (phone, amt, recvCcy) => {
@@ -145,13 +228,40 @@ export default function SendMoneyScreen() {
     if (!amount || sendAmt <= 0) return Toast.show({ type: 'error', text1: 'Enter an amount' })
     setLoading(true)
     try {
-      if (isSender && selectedPmId !== 'wallet') {
-        await api.post(`/payment-methods/${selectedPmId}/top-up`, { amount: sendAmt })
+      if (paymentType !== 'wallet') {
+        let pmId = selectedPmId
+        if (!pmId && paymentType === 'card') {
+          const [mm, yy] = cardExpiry.split('/')
+          if (!mm || !yy) { Toast.show({ type: 'error', text1: 'Invalid card expiry' }); setLoading(false); return }
+          if (!cardName) { Toast.show({ type: 'error', text1: 'Enter cardholder name' }); setLoading(false); return }
+          const { data: pm } = await api.post('/payment-methods/card', {
+            card_number: cardNumber.replace(/\s/g, ''),
+            expiry_month: parseInt(mm, 10),
+            expiry_year: parseInt('20' + yy, 10),
+            holder_name: cardName,
+            set_default: false,
+          })
+          pmId = pm.id
+        } else if (!pmId && paymentType === 'ach') {
+          if (achRouting.length !== 9) { Toast.show({ type: 'error', text1: 'Routing number must be 9 digits' }); setLoading(false); return }
+          if (!achAccount) { Toast.show({ type: 'error', text1: 'Enter account number' }); setLoading(false); return }
+          const { data: pm } = await api.post('/payment-methods/ach', {
+            holder_name: achHolder,
+            routing_number: achRouting,
+            account_number: achAccount,
+            account_type: achType,
+            set_default: false,
+          })
+          pmId = pm.id
+        }
+        await api.post(`/payment-methods/${pmId}/top-up`, { amount: sendAmt })
         Toast.show({ type: 'success', text1: 'Wallet funded!' })
       }
       const { data } = await api.post('/transfer/send', {
         to_phone: toPhone, amount: sendAmt, description,
       })
+      notifySender(data)
+      notifyRecipient(data, toPhone)
       setResult(data)
       Toast.show({ type: 'success', text1: 'Transfer sent!' })
     } catch (err) {
@@ -311,18 +421,15 @@ export default function SendMoneyScreen() {
           </TouchableOpacity>
           {showCountryPicker && (
             <View style={s.pickerDropdown}>
-              <FlatList
-                data={DEST_COUNTRIES}
-                keyExtractor={c => c.name}
-                style={{ maxHeight: 200 }}
-                renderItem={({ item: c }) => (
-                  <TouchableOpacity style={s.pickerOption} onPress={() => { setDestCountry(c); setShowCountryPicker(false) }}>
+              <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
+                {DEST_COUNTRIES.map(c => (
+                  <TouchableOpacity key={c.name} style={s.pickerOption} onPress={() => { setDestCountry(c); setShowCountryPicker(false) }}>
                     <Text style={{ fontSize: 16 }}>{c.flag}</Text>
                     <Text style={{ fontSize: 14, flex: 1, color: '#111827', fontWeight: '500' }}>{c.name}</Text>
                     <Text style={{ fontSize: 12, color: '#9CA3AF' }}>{c.currency}</Text>
                   </TouchableOpacity>
-                )}
-              />
+                ))}
+              </ScrollView>
             </View>
           )}
 
@@ -369,22 +476,95 @@ export default function SendMoneyScreen() {
           <Text style={[s.inputLabel, { marginTop: 16 }]}>Reason (optional)</Text>
           <TextInput style={s.input} placeholder="Rent, groceries…" placeholderTextColor="#9CA3AF" value={description} onChangeText={setDescription} />
 
-          {/* Payment method selector (senders only) */}
-          {isSender && paymentMethods.length > 0 && (
+          {/* Payment method selector */}
+          {(
             <View style={{ marginTop: 16 }}>
-              <Text style={s.inputLabel}>Fund from</Text>
-              <TouchableOpacity style={s.countryPicker} onPress={() => setSelectedPmId('wallet')}>
-                <Wallet size={16} color={selectedPmId === 'wallet' ? '#4F46E5' : '#9CA3AF'} />
-                <Text style={[s.countryName, { color: selectedPmId === 'wallet' ? '#4F46E5' : '#111827' }]}>Wallet balance</Text>
-                {selectedPmId === 'wallet' && <CheckCircle size={16} color="#4F46E5" />}
-              </TouchableOpacity>
-              {paymentMethods.map(pm => (
-                <TouchableOpacity key={pm.id} style={[s.countryPicker, { marginTop: 6 }]} onPress={() => setSelectedPmId(pm.id)}>
-                  <CreditCard size={16} color={selectedPmId === pm.id ? '#4F46E5' : '#9CA3AF'} />
-                  <Text style={[s.countryName, { color: selectedPmId === pm.id ? '#4F46E5' : '#111827' }]}>{pm.label}</Text>
-                  {selectedPmId === pm.id && <CheckCircle size={16} color="#4F46E5" />}
+              <Text style={s.inputLabel}>Fund transfer with</Text>
+              <View style={s.pmRow}>
+                {/* Wallet tile */}
+                <TouchableOpacity style={[s.pmTile, paymentType === 'wallet' && s.pmTileActive]} onPress={() => switchPaymentType('wallet')} activeOpacity={0.8}>
+                  <Wallet size={22} color={paymentType === 'wallet' ? '#4F46E5' : '#9CA3AF'} />
+                  <Text style={[s.pmTileLabel, paymentType === 'wallet' && s.pmTileLabelActive]}>Wallet</Text>
+                  <Text style={s.pmTileSub} numberOfLines={1}>{wallet ? `${Number(wallet.balance).toLocaleString()} ${senderCcy}` : 'Balance'}</Text>
                 </TouchableOpacity>
-              ))}
+                {/* Credit Card tile */}
+                <TouchableOpacity style={[s.pmTile, paymentType === 'card' && s.pmTileActive]} onPress={() => switchPaymentType('card')} activeOpacity={0.8}>
+                  <CreditCard size={22} color={paymentType === 'card' ? '#4F46E5' : '#9CA3AF'} />
+                  <Text style={[s.pmTileLabel, paymentType === 'card' && s.pmTileLabelActive]}>Credit Card</Text>
+                  <Text style={s.pmTileSub}>{savedCards.length > 0 ? `${savedCards.length} saved` : 'Enter details'}</Text>
+                </TouchableOpacity>
+                {/* Bank ACH tile */}
+                <TouchableOpacity style={[s.pmTile, paymentType === 'ach' && s.pmTileActive]} onPress={() => switchPaymentType('ach')} activeOpacity={0.8}>
+                  <Building2 size={22} color={paymentType === 'ach' ? '#4F46E5' : '#9CA3AF'} />
+                  <Text style={[s.pmTileLabel, paymentType === 'ach' && s.pmTileLabelActive]}>Bank (ACH)</Text>
+                  <Text style={s.pmTileSub}>{savedACH.length > 0 ? `${savedACH.length} saved` : 'Enter details'}</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Inline Credit Card form */}
+              {paymentType === 'card' && (
+                <View style={s.pmForm}>
+                  {savedCards.length > 0 && (
+                    <>
+                      {savedCards.map(m => (
+                        <TouchableOpacity key={m.id} style={[s.savedPmRow, selectedPmId === m.id && s.savedPmRowActive]} onPress={() => setSelectedPmId(m.id)}>
+                          <CreditCard size={14} color={selectedPmId === m.id ? '#4F46E5' : '#9CA3AF'} />
+                          <Text style={[s.savedPmLabel, selectedPmId === m.id && { color: '#4F46E5' }]}>{m.label}</Text>
+                          {selectedPmId === m.id && <CheckCircle size={14} color="#4F46E5" />}
+                        </TouchableOpacity>
+                      ))}
+                      <TouchableOpacity onPress={() => setSelectedPmId(selectedPmId ? null : (savedCards[0]?.id || null))} style={{ alignSelf: 'flex-start', marginBottom: 6 }}>
+                        <Text style={{ fontSize: 12, color: '#4F46E5', fontWeight: '600' }}>{selectedPmId ? '+ Use a different card' : '← Use saved card'}</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                  {!selectedPmId && (
+                    <View style={{ gap: 8 }}>
+                      <TextInput style={s.pmInput} placeholder="Card number" placeholderTextColor="#9CA3AF" keyboardType="number-pad" maxLength={19} value={cardNumber} onChangeText={v => setCardNumber(formatCardNumber(v))} />
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <TextInput style={[s.pmInput, { flex: 1 }]} placeholder="MM/YY" placeholderTextColor="#9CA3AF" keyboardType="number-pad" maxLength={5} value={cardExpiry} onChangeText={v => setCardExpiry(formatExpiry(v))} />
+                        <TextInput style={[s.pmInput, { flex: 1 }]} placeholder="CVV" placeholderTextColor="#9CA3AF" keyboardType="number-pad" maxLength={4} secureTextEntry value={cardCvv} onChangeText={v => setCardCvv(v.replace(/\D/g, '').slice(0, 4))} />
+                      </View>
+                      <TextInput style={s.pmInput} placeholder="Cardholder name" placeholderTextColor="#9CA3AF" value={cardName} onChangeText={setCardName} />
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* Inline Bank ACH form */}
+              {paymentType === 'ach' && (
+                <View style={s.pmForm}>
+                  {savedACH.length > 0 && (
+                    <>
+                      {savedACH.map(m => (
+                        <TouchableOpacity key={m.id} style={[s.savedPmRow, selectedPmId === m.id && s.savedPmRowActive]} onPress={() => setSelectedPmId(m.id)}>
+                          <Building2 size={14} color={selectedPmId === m.id ? '#4F46E5' : '#9CA3AF'} />
+                          <Text style={[s.savedPmLabel, selectedPmId === m.id && { color: '#4F46E5' }]}>{m.label}</Text>
+                          {selectedPmId === m.id && <CheckCircle size={14} color="#4F46E5" />}
+                        </TouchableOpacity>
+                      ))}
+                      <TouchableOpacity onPress={() => setSelectedPmId(selectedPmId ? null : (savedACH[0]?.id || null))} style={{ alignSelf: 'flex-start', marginBottom: 6 }}>
+                        <Text style={{ fontSize: 12, color: '#4F46E5', fontWeight: '600' }}>{selectedPmId ? '+ Use a different account' : '← Use saved account'}</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                  {!selectedPmId && (
+                    <View style={{ gap: 8 }}>
+                      <TextInput style={s.pmInput} placeholder="Account holder name" placeholderTextColor="#9CA3AF" value={achHolder} onChangeText={setAchHolder} />
+                      <TextInput style={s.pmInput} placeholder="Routing number (9 digits)" placeholderTextColor="#9CA3AF" keyboardType="number-pad" maxLength={9} value={achRouting} onChangeText={v => setAchRouting(v.replace(/\D/g, '').slice(0, 9))} />
+                      <TextInput style={s.pmInput} placeholder="Account number" placeholderTextColor="#9CA3AF" keyboardType="number-pad" value={achAccount} onChangeText={v => setAchAccount(v.replace(/\D/g, ''))} />
+                      <View style={s.pmSegmentRow}>
+                        <TouchableOpacity style={[s.pmSegment, achType === 'checking' && s.pmSegmentActive]} onPress={() => setAchType('checking')}>
+                          <Text style={[s.pmSegmentText, achType === 'checking' && s.pmSegmentTextActive]}>Checking</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[s.pmSegment, achType === 'savings' && s.pmSegmentActive]} onPress={() => setAchType('savings')}>
+                          <Text style={[s.pmSegmentText, achType === 'savings' && s.pmSegmentTextActive]}>Savings</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+                </View>
+              )}
             </View>
           )}
 
@@ -444,6 +624,8 @@ function CashPickupSection({ toPhone, amount, sendCcy, destCountry, receivedAmt,
         to_phone: toPhone, recipient_name: recipientName,
         amount, recv_currency: destCountry.currency, agent_id: selectedAgent.id,
       })
+      notifySender(data)
+      notifyRecipient(data, toPhone)
       Toast.show({ type: 'success', text1: 'Cash pickup created!' })
       onSuccess(data)
     } catch (err) {
@@ -514,6 +696,8 @@ function WaveSection({ toPhone, amount, destCountry, receivedAmt, defaultOpen = 
       const { data } = await api.post('/transfer/wave', {
         to_phone: wavePhone, amount, recv_currency: destCountry.currency,
       })
+      notifySender(data)
+      notifyRecipient(data, wavePhone)
       Toast.show({ type: 'success', text1: 'Wave transfer sent!' })
       onSuccess(data)
     } catch (err) {
@@ -624,6 +808,23 @@ const s = StyleSheet.create({
   btn:           { backgroundColor: '#4F46E5', borderRadius: 14, paddingVertical: 15, alignItems: 'center', marginTop: 24, flexDirection: 'row', justifyContent: 'center', gap: 8 },
   btnDisabled:   { opacity: 0.7 },
   btnText:       { color: '#fff', fontSize: 16, fontWeight: '700' },
+  // Payment method tiles
+  pmRow:           { flexDirection: 'row', gap: 8, marginBottom: 4 },
+  pmTile:          { flex: 1, alignItems: 'center', gap: 4, padding: 12, borderRadius: 14, borderWidth: 1.5, borderColor: '#E5E7EB', backgroundColor: '#fff' },
+  pmTileActive:    { borderColor: '#4F46E5', backgroundColor: '#EEF2FF' },
+  pmTileLabel:     { fontSize: 11, fontWeight: '700', color: '#9CA3AF', textAlign: 'center' },
+  pmTileLabelActive:{ color: '#4F46E5' },
+  pmTileSub:       { fontSize: 10, color: '#9CA3AF', textAlign: 'center' },
+  pmForm:          { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1.5, borderColor: '#C7D2FE', padding: 12, gap: 0, marginTop: 6 },
+  pmInput:         { backgroundColor: '#F9FAFB', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11, fontSize: 14, color: '#111827' },
+  savedPmRow:      { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, paddingHorizontal: 2, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  savedPmRowActive:{ backgroundColor: '#EEF2FF', borderRadius: 10, paddingHorizontal: 8, borderBottomWidth: 0, marginBottom: 2 },
+  savedPmLabel:    { flex: 1, fontSize: 13, fontWeight: '500', color: '#374151' },
+  pmSegmentRow:    { flexDirection: 'row', backgroundColor: '#F3F4F6', borderRadius: 10, padding: 3, gap: 3 },
+  pmSegment:       { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8 },
+  pmSegmentActive: { backgroundColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 2, elevation: 1 },
+  pmSegmentText:   { fontSize: 13, fontWeight: '600', color: '#9CA3AF' },
+  pmSegmentTextActive:{ color: '#4F46E5' },
   // Success screen
   successContainer: { flex: 1, backgroundColor: '#F9FAFB', paddingHorizontal: 24, alignItems: 'center', paddingBottom: 40 },
   successIcon:   { width: 80, height: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },

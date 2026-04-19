@@ -3,12 +3,19 @@ import {
   View, Text, TextInput, TouchableOpacity,
   StyleSheet, KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { useRoute } from '@react-navigation/native'
 import Toast from 'react-native-toast-message'
 import { Lock } from 'lucide-react-native'
 import api from '../api/client'
+import { useAuth } from '../context/AuthContext'
 import Spinner from '../components/Spinner'
 
 export default function SetPINScreen() {
+  const insets = useSafeAreaInsets()
+  const route = useRoute()
+  const { token, user } = route.params || {}
+  const { saveSession } = useAuth()
   const [pin, setPin] = useState('')
   const [confirmPin, setConfirmPin] = useState('')
   const [loading, setLoading] = useState(false)
@@ -18,9 +25,12 @@ export default function SetPINScreen() {
     if (pin !== confirmPin) return Toast.show({ type: 'error', text1: 'PINs do not match' })
     setLoading(true)
     try {
-      await api.post('/user/pin', { pin, confirm_pin: confirmPin })
+      await api.post('/user/pin', { pin, confirm_pin: confirmPin }, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
       Toast.show({ type: 'success', text1: 'PIN set successfully!' })
-      // Navigation handled automatically by auth state (user is now authenticated)
+      // saveSession flips isAuthenticated → navigator switches to authenticated stack
+      await saveSession(token, user)
     } catch (err) {
       Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Failed to set PIN' })
     } finally {
@@ -29,8 +39,8 @@ export default function SetPINScreen() {
   }
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={s.container} keyboardShouldPersistTaps="handled">
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: '#F9FAFB' }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView contentContainerStyle={[s.container, { paddingTop: insets.top + 32, paddingBottom: insets.bottom + 24 }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         <View style={s.iconWrap}>
           <View style={s.iconBox}>
             <Lock size={32} color="#fff" />
@@ -72,7 +82,7 @@ export default function SetPINScreen() {
 }
 
 const s = StyleSheet.create({
-  container:   { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingVertical: 48, backgroundColor: '#F9FAFB' },
+  container:   { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24 },
   iconWrap:    { alignItems: 'center', marginBottom: 40 },
   iconBox:     { width: 64, height: 64, backgroundColor: '#4F46E5', borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
   title:       { fontSize: 24, fontWeight: '700', color: '#111827' },
