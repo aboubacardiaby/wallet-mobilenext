@@ -1,18 +1,20 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ScrollView, KeyboardAvoidingView, Platform, Alert,
+  ScrollView, KeyboardAvoidingView, Platform, Modal,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute } from '@react-navigation/native'
 import Toast from 'react-native-toast-message'
-import {
-  ArrowLeft, Send, Users, ChevronDown,
-  CheckCircle, MapPin, Zap, RefreshCw, CreditCard, Wallet, Building2,
-} from 'lucide-react-native'
+import { ChevronDown, UserPlus, CheckCircle, ArrowRight, Zap, Shield, Clock } from 'lucide-react-native'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import Spinner from '../components/Spinner'
+
+const TEAL = '#0E9E98'
+const LIGHT_TEAL = '#D4EFEE'
+const TEAL_TEXT = '#0A7A76'
+const BEIGE = '#F5F0E8'
 
 const DEST_COUNTRIES = [
   { name: 'Senegal',       flag: '🇸🇳', currency: 'XOF', dial: '+221' },
@@ -40,44 +42,25 @@ const CURRENCY_SYMBOLS = {
   MAD: 'MAD', ZAR: 'R', EGP: '£E', GNF: 'GNF', ETB: 'Br', GMD: 'D',
 }
 
-const CURRENCY_FLAGS = {
-  USD: '🇺🇸', EUR: '🇪🇺', GBP: '🇬🇧', CAD: '🇨🇦', CHF: '🇨🇭',
-  XOF: '🌍', XAF: '🌍', NGN: '🇳🇬', GHS: '🇬🇭', KES: '🇰🇪',
-  MAD: '🇲🇦', ZAR: '🇿🇦', EGP: '🇪🇬', GNF: '🇬🇳', ETB: '🇪🇹', GMD: '🇬🇲',
-}
 const FEE_RATE = 0.015
 
-function formatCardNumber(raw) {
-  return raw.replace(/\D/g, '').slice(0, 16).replace(/(.{4})/g, '$1 ').trim()
-}
-function formatExpiry(raw) {
-  const d = raw.replace(/\D/g, '').slice(0, 4)
-  return d.length > 2 ? `${d.slice(0, 2)}/${d.slice(2)}` : d
-}
-
-// ── Notification helpers ──────────────────────────────────────────────────────
-// All fire-and-forget: notification failure must never block the transfer UX.
-
-// 1. Sender receipt — email + in-app notification for the person who sent money
 async function notifySender(transferData) {
   const type = transferData.pickup_code ? 'cash_pickup' : transferData.wave_ref ? 'wave' : 'wallet'
   try {
     await Promise.all([
-      // Email receipt to sender
       api.post('/notifications/transfer-email', {
-        recipient_type:   'sender',
-        transfer_type:    type,
-        transaction_ref:  transferData.transaction_ref,
-        send_amount:      transferData.send_amount,
-        send_currency:    transferData.send_currency,
-        fee:              transferData.fee,
-        received_amount:  transferData.received_amount,
-        recv_currency:    transferData.recv_currency,
-        recipient_name:   transferData.recipient_name,
-        exchange_rate:    transferData.exchange_rate,
-        pickup_code:      transferData.pickup_code || null,
+        recipient_type:  'sender',
+        transfer_type:   type,
+        transaction_ref: transferData.transaction_ref,
+        send_amount:     transferData.send_amount,
+        send_currency:   transferData.send_currency,
+        fee:             transferData.fee,
+        received_amount: transferData.received_amount,
+        recv_currency:   transferData.recv_currency,
+        recipient_name:  transferData.recipient_name,
+        exchange_rate:   transferData.exchange_rate,
+        pickup_code:     transferData.pickup_code || null,
       }),
-      // In-app notification for sender
       api.post('/notifications', {
         type:    'transaction',
         title:   'Transfer sent ✓',
@@ -87,7 +70,6 @@ async function notifySender(transferData) {
   } catch { /* silent */ }
 }
 
-// 2. Recipient notification — SMS/email + PIN for cash pickup
 async function notifyRecipient(transferData, toPhone) {
   const type = transferData.pickup_code ? 'cash_pickup' : transferData.wave_ref ? 'wave' : 'wallet'
   try {
@@ -98,7 +80,6 @@ async function notifyRecipient(transferData, toPhone) {
       received_amount: transferData.received_amount,
       recv_currency:   transferData.recv_currency,
       sender_name:     transferData.sender_name || null,
-      // PIN sent to recipient only for cash pickup
       pickup_code:     transferData.pickup_code || null,
       wave_ref:        transferData.wave_ref    || null,
     })
@@ -116,60 +97,46 @@ export default function SendMoneyScreen() {
   const route = useRoute()
   const insets = useSafeAreaInsets()
   const { user } = useAuth()
-  const isSender = user?.user_type === 'sender'
 
-  const [wallet, setWallet] = useState(null)
-  const [toPhone, setToPhone] = useState(route.params?.to_phone || '')
-  const [description, setDescription] = useState('')
-  const [amount, setAmount] = useState('')
-  const [destCountry, setDestCountry] = useState(DEST_COUNTRIES[0])
+  const [wallet, setWallet]                 = useState(null)
+  const [toPhone, setToPhone]               = useState(route.params?.to_phone || '')
+  const [description, setDescription]       = useState('')
+  const [amount, setAmount]                 = useState('')
+  const [destCountry, setDestCountry]       = useState(DEST_COUNTRIES[16])
   const [showCountryPicker, setShowCountryPicker] = useState(false)
-  const [recipients, setRecipients] = useState([])
-  const [paymentMethods, setPaymentMethods] = useState([])
-  const [paymentType, setPaymentType] = useState('wallet') // 'wallet' | 'card' | 'ach'
-  const [selectedPmId, setSelectedPmId] = useState(null) // id of a saved PM, or null for inline entry
-  // Inline card fields
-  const [cardNumber, setCardNumber] = useState('')
-  const [cardExpiry, setCardExpiry] = useState('')
-  const [cardCvv, setCardCvv] = useState('')
-  const [cardName, setCardName] = useState('')
-  // Inline ACH fields
-  const [achRouting, setAchRouting] = useState('')
-  const [achAccount, setAchAccount] = useState('')
-  const [achHolder, setAchHolder] = useState('')
-  const [achType, setAchType] = useState('checking')
-  const [liveRate, setLiveRate] = useState(null)
-  const [rateLoading, setRateLoading] = useState(false)
-  const [quote, setQuote] = useState(null)
-  const [quoteLoading, setQuoteLoading] = useState(false)
-  const [waveCheck, setWaveCheck] = useState(null)
-  const [waveCheckLoading, setWaveCheckLoading] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState(null)
+  const [liveRate, setLiveRate]             = useState(null)
+  const [rateLoading, setRateLoading]       = useState(false)
+  const [quote, setQuote]                   = useState(null)
+  const [quoteLoading, setQuoteLoading]     = useState(false)
+  const [loading, setLoading]               = useState(false)
+  const [confirming, setConfirming]         = useState(false)
+  const [showConfirm, setShowConfirm]       = useState(false)
+  const [result, setResult]                 = useState(null)
+  const [transactions, setTransactions]     = useState([])
 
-  const savedCards = paymentMethods.filter(m => m.type === 'card')
-  const savedACH   = paymentMethods.filter(m => m.type === 'ach' || m.type === 'bank_transfer')
-
-  const switchPaymentType = (type) => {
-    setPaymentType(type)
-    if (type === 'wallet') {
-      setSelectedPmId(null)
-    } else if (type === 'card') {
-      const def = savedCards.find(m => m.is_default) || savedCards[0]
-      setSelectedPmId(def?.id || null)
-    } else if (type === 'ach') {
-      const def = savedACH.find(m => m.is_default) || savedACH[0]
-      setSelectedPmId(def?.id || null)
-    }
-  }
-
-  const senderCcy = wallet?.currency || (isSender ? 'USD' : 'XOF')
-  const destCcy = destCountry.currency
-  const sendAmt = parseFloat(amount) || 0
-  const fee = parseFloat((sendAmt * FEE_RATE).toFixed(2))
-  const netAmt = parseFloat((sendAmt - fee).toFixed(2))
+  const senderCcy    = wallet?.currency || 'USD'
+  const destCcy      = destCountry.currency
+  const sendAmt      = parseFloat(amount) || 0
+  const fee          = parseFloat((sendAmt * FEE_RATE).toFixed(2))
+  const netAmt       = parseFloat((sendAmt - fee).toFixed(2))
   const effectiveRate = (quote?.recipient_found ? quote.exchange_rate : liveRate) ?? liveRate
-  const receivedAmt = effectiveRate && netAmt > 0 ? parseFloat((netAmt * effectiveRate).toFixed(2)) : null
+  const receivedAmt  = effectiveRate && netAmt > 0
+    ? parseFloat((netAmt * effectiveRate).toFixed(2))
+    : null
+  const isValid = toPhone.trim().length > 5 && sendAmt > 0
+
+  const initials = user?.full_name
+    ? user.full_name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
+    : (user?.email?.[0] || 'U').toUpperCase()
+
+  // Sync params whenever the screen is (re-)focused with new recipient data
+  useEffect(() => {
+    if (route.params?.to_phone) setToPhone(route.params.to_phone)
+    if (route.params?.country_name) {
+      const match = DEST_COUNTRIES.find(c => c.name === route.params.country_name)
+      if (match) setDestCountry(match)
+    }
+  }, [route.params?.to_phone, route.params?.country_name])
 
   useEffect(() => {
     if (!senderCcy || !destCcy) return
@@ -183,658 +150,716 @@ export default function SendMoneyScreen() {
 
   useEffect(() => {
     api.get('/wallet/balance').then(({ data }) => setWallet(data)).catch(() => {})
-    api.get('/user/recipients').then(({ data }) => setRecipients(data.recipients || [])).catch(() => {})
-    api.get('/payment-methods').then(({ data }) => {
-      setPaymentMethods(data.payment_methods || [])
-      const def = (data.payment_methods || []).find(m => m.is_default)
-      if (def) setSelectedPmId(def.id)
-    }).catch(() => {})
+    api.get('/transactions?limit=5').then(({ data }) => setTransactions(data.transactions || [])).catch(() => {})
   }, [])
 
   const fetchQuote = useCallback(async (phone, amt, recvCcy) => {
     if (!phone || !amt || parseFloat(amt) <= 0) { setQuote(null); return }
     setQuoteLoading(true)
     try {
-      const { data } = await api.get(`/transfer/quote?to_phone=${encodeURIComponent(phone)}&amount=${amt}&recv_currency=${recvCcy}`)
+      const { data } = await api.get(
+        `/transfer/quote?to_phone=${encodeURIComponent(phone)}&amount=${amt}&recv_currency=${recvCcy}`
+      )
       setQuote(data)
-      // If recipient has a different wallet currency, update live rate accordingly
-      if (data.recipient_found && data.recv_currency !== destCcy) {
-        setLiveRate(data.exchange_rate)
-      }
+      if (data.recipient_found && data.exchange_rate) setLiveRate(data.exchange_rate)
     } catch { setQuote(null) }
     finally { setQuoteLoading(false) }
-  }, [destCcy])
+  }, [])
 
   useEffect(() => {
     const t = setTimeout(() => fetchQuote(toPhone, amount, destCcy), 600)
     return () => clearTimeout(t)
   }, [toPhone, amount, destCcy, fetchQuote])
 
-  // Wave check — runs when quote confirms no account found
-  useEffect(() => {
-    if (!quote || quote.recipient_found || toPhone.length <= 5) {
-      setWaveCheck(null)
-      return
+  // Phase 1: confirm funds exist before sending
+  const verifyPayment = async () => {
+    const { data: freshWallet } = await api.get('/wallet/balance')
+    setWallet(freshWallet)
+    if (parseFloat(freshWallet.balance) < sendAmt) {
+      throw new Error(
+        `Insufficient balance. Available: ${fmt(parseFloat(freshWallet.balance), senderCcy)}`
+      )
     }
-    setWaveCheckLoading(true)
-    api.get(`/transfer/wave/check?phone=${encodeURIComponent(toPhone)}&country=${encodeURIComponent(destCountry.name)}`)
-      .then(({ data }) => setWaveCheck(data))
-      .catch(() => setWaveCheck({ has_wave: false }))
-      .finally(() => setWaveCheckLoading(false))
-  }, [quote, toPhone, destCountry.name])
+  }
 
-  const submit = async () => {
-    if (!toPhone) return Toast.show({ type: 'error', text1: 'Enter recipient phone' })
+  // "Continue to send" — verify funds then show confirmation sheet
+  const handleContinue = async () => {
+    if (!toPhone.trim()) return Toast.show({ type: 'error', text1: 'Enter recipient phone' })
     if (!amount || sendAmt <= 0) return Toast.show({ type: 'error', text1: 'Enter an amount' })
     setLoading(true)
     try {
-      if (paymentType !== 'wallet') {
-        let pmId = selectedPmId
-        if (!pmId && paymentType === 'card') {
-          const [mm, yy] = cardExpiry.split('/')
-          if (!mm || !yy) { Toast.show({ type: 'error', text1: 'Invalid card expiry' }); setLoading(false); return }
-          if (!cardName) { Toast.show({ type: 'error', text1: 'Enter cardholder name' }); setLoading(false); return }
-          const { data: pm } = await api.post('/payment-methods/card', {
-            card_number: cardNumber.replace(/\s/g, ''),
-            expiry_month: parseInt(mm, 10),
-            expiry_year: parseInt('20' + yy, 10),
-            holder_name: cardName,
-            set_default: false,
-          })
-          pmId = pm.id
-        } else if (!pmId && paymentType === 'ach') {
-          if (achRouting.length !== 9) { Toast.show({ type: 'error', text1: 'Routing number must be 9 digits' }); setLoading(false); return }
-          if (!achAccount) { Toast.show({ type: 'error', text1: 'Enter account number' }); setLoading(false); return }
-          const { data: pm } = await api.post('/payment-methods/ach', {
-            holder_name: achHolder,
-            routing_number: achRouting,
-            account_number: achAccount,
-            account_type: achType,
-            set_default: false,
-          })
-          pmId = pm.id
-        }
-        await api.post(`/payment-methods/${pmId}/top-up`, { amount: sendAmt })
-        Toast.show({ type: 'success', text1: 'Wallet funded!' })
-      }
+      await verifyPayment()
+      setShowConfirm(true)
+    } catch (err) {
+      Toast.show({ type: 'error', text1: err.response?.data?.detail || err.message || 'Transfer failed' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // "Confirm transfer" — execute after user reviews the sheet
+  const confirmTransfer = async () => {
+    setConfirming(true)
+    try {
       const { data } = await api.post('/transfer/send', {
         to_phone: toPhone, amount: sendAmt, description,
       })
+      setShowConfirm(false)
       notifySender(data)
       notifyRecipient(data, toPhone)
       setResult(data)
       Toast.show({ type: 'success', text1: 'Transfer sent!' })
     } catch (err) {
-      Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Transfer failed' })
-    } finally { setLoading(false) }
+      Toast.show({ type: 'error', text1: err.response?.data?.detail || err.message || 'Transfer failed' })
+    } finally {
+      setConfirming(false)
+    }
   }
 
+  // ── Success screen ────────────────────────────────────────────────────────────
   if (result) {
-    const isPickup = !!result.pickup_code
-    const isWave   = !!result.wave_ref
     return (
-      <View style={[s.successContainer, { paddingTop: insets.top + 16 }]}>
-        <View style={[s.successIcon, { backgroundColor: isPickup ? '#FEF3C7' : isWave ? '#DBEAFE' : '#DCFCE7' }]}>
-          {isPickup ? <MapPin size={36} color="#D97706" /> : isWave ? <Zap size={36} color="#2563EB" /> : <CheckCircle size={36} color="#16A34A" />}
+      <View style={[s.successWrap, { paddingTop: insets.top + 20 }]}>
+        <View style={s.successIconWrap}>
+          <CheckCircle size={48} color={TEAL} />
         </View>
-        <Text style={s.successTitle}>{isPickup ? 'Cash Pickup Ready!' : isWave ? 'Wave Transfer Sent!' : 'Transfer Successful!'}</Text>
-        <Text style={s.successSub}>{isPickup ? 'Share the pickup code with the recipient' : isWave ? "Funds sent to recipient's Wave account" : 'Your money is on its way'}</Text>
-
-        {isPickup && (
-          <View style={s.pickupBox}>
-            <Text style={s.pickupLabel}>PICKUP CODE</Text>
-            <Text style={s.pickupCode}>{result.pickup_code}</Text>
-          </View>
-        )}
-        {isWave && (
-          <View style={[s.pickupBox, { backgroundColor: '#2563EB' }]}>
-            <Text style={s.pickupLabel}>WAVE REFERENCE</Text>
-            <Text style={s.pickupCode}>{result.wave_ref}</Text>
-          </View>
-        )}
-
-        <View style={[s.resultAmountBox, { backgroundColor: isWave ? '#2563EB' : '#4F46E5' }]}>
-          <Text style={s.resultAmountLabel}>{isPickup ? 'Amount to collect' : 'Recipient receives'}</Text>
-          <Text style={s.resultAmount}>{result.received_amount?.toLocaleString(undefined, { maximumFractionDigits: 2 })} <Text style={{ fontSize: 18 }}>{result.recv_currency}</Text></Text>
-        </View>
-
-        {/* Agent location for cash pickup */}
-        {result.agent && (
-          <View style={[s.summaryCard, { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 8 }]}>
-            <View style={{ width: 36, height: 36, backgroundColor: '#FEF3C7', borderRadius: 12, alignItems: 'center', justifyContent: 'center' }}>
-              <MapPin size={16} color="#D97706" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 14, fontWeight: '700', color: '#111827' }}>{result.agent.name}</Text>
-              <Text style={{ fontSize: 12, color: '#6B7280' }}>{result.agent.address}</Text>
-              <Text style={{ fontSize: 12, color: '#4F46E5', fontWeight: '500', marginTop: 2 }}>{result.agent.phone}</Text>
-            </View>
-          </View>
-        )}
-
-        <View style={s.summaryCard}>
-          <SummaryRow label="To"          value={result.recipient_name || toPhone} />
-          <SummaryRow label="You sent"    value={fmt(result.send_amount, result.send_currency)} bold />
-          <SummaryRow label="Fee (1.5%)"  value={fmt(result.fee, result.send_currency)} />
+        <Text style={s.successTitle}>Transfer Sent!</Text>
+        <Text style={s.successSub}>
+          {result.recipient_name || toPhone} will receive{'\n'}
+          <Text style={{ fontWeight: '800', color: '#111' }}>
+            {result.received_amount?.toLocaleString(undefined, { maximumFractionDigits: 2 })} {result.recv_currency}
+          </Text>
+        </Text>
+        <View style={s.successCard}>
+          <SuccessRow label="You sent"     value={fmt(result.send_amount, result.send_currency)} bold />
+          <SuccessRow label="Fee (1.5%)"   value={fmt(result.fee, result.send_currency)} />
           {result.recv_currency !== result.send_currency && (
-            <SummaryRow label="Rate" value={`1 ${result.send_currency} = ${result.exchange_rate?.toFixed(4)} ${result.recv_currency}`} />
+            <SuccessRow label="Rate" value={`1 ${result.send_currency} = ${result.exchange_rate?.toFixed(4)} ${result.recv_currency}`} />
           )}
-          <SummaryRow label="Ref" value={(result.transaction_ref || '').slice(0, 16) + '…'} />
+          <SuccessRow label="Reference"    value={(result.transaction_ref || '').slice(0, 16) + '…'} />
         </View>
-
-        <TouchableOpacity style={s.btn} onPress={() => navigation.navigate('Main')}>
-          <Text style={s.btnText}>Back to Home</Text>
+        <TouchableOpacity style={s.successBtn} onPress={() => navigation.navigate('Main')}>
+          <Text style={s.successBtnText}>Back to Home</Text>
         </TouchableOpacity>
       </View>
     )
   }
 
+  // ── Main screen ───────────────────────────────────────────────────────────────
   return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView style={{ flex: 1, backgroundColor: '#F9FAFB' }} keyboardShouldPersistTaps="handled">
-        {/* Header */}
-        <View style={[s.header, { paddingTop: insets.top + 8 }]}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn}>
-            <ArrowLeft size={20} color="#374151" />
-          </TouchableOpacity>
-          <Text style={s.headerTitle}>Send Money</Text>
-          <View style={{ width: 36 }} />
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: '#F4F6F9' }}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: 48 }}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {/* ── Dark header band ── */}
+        <View style={[s.headerBand, { paddingTop: insets.top + 16 }]}>
+
+          {/* Top row: avatar + invite */}
+          <View style={s.topRow}>
+            <TouchableOpacity style={s.avatar} onPress={() => navigation.navigate('Profile')} activeOpacity={0.85}>
+              <Text style={s.avatarText}>{initials}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.inviteBtn} activeOpacity={0.8}>
+              <Zap size={13} color="#0A1628" style={{ marginRight: 4 }} />
+              <Text style={s.inviteBtnText}>Invite friends</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Title + country */}
+          <View style={s.titleRow}>
+            <View>
+              <Text style={s.titleSub}>Transfer</Text>
+              <Text style={s.title}>Send money to</Text>
+            </View>
+            <TouchableOpacity
+              style={s.countryPill}
+              onPress={() => setShowCountryPicker(v => !v)}
+              activeOpacity={0.85}
+            >
+              <Text style={{ fontSize: 18 }}>{destCountry.flag}</Text>
+              <Text style={s.countryPillText}>{destCountry.name}</Text>
+              <ChevronDown size={13} color="rgba(255,255,255,0.7)" />
+            </TouchableOpacity>
+          </View>
         </View>
 
-        <View style={s.content}>
-          {/* Balance */}
-          {wallet && (
-            <View style={s.balanceChip}>
-              <Text style={s.balanceLabel}>Your balance</Text>
-              <Text style={s.balanceValue}>{Number(wallet.balance).toLocaleString()} {senderCcy}</Text>
+        {/* ── Country dropdown ── */}
+        {showCountryPicker && (
+          <View style={s.countryDropdown}>
+            <ScrollView style={{ maxHeight: 220 }} nestedScrollEnabled showsVerticalScrollIndicator={false}>
+              {DEST_COUNTRIES.map(c => (
+                <TouchableOpacity
+                  key={c.name}
+                  style={[s.countryOption, c.name === destCountry.name && s.countryOptionActive]}
+                  onPress={() => { setDestCountry(c); setShowCountryPicker(false) }}
+                >
+                  <Text style={{ fontSize: 20 }}>{c.flag}</Text>
+                  <Text style={s.countryOptionName}>{c.name}</Text>
+                  <Text style={s.countryOptionCcy}>{c.currency}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+
+        {/* ── Main card (floats over header) ── */}
+        <View style={s.mainCard}>
+
+          {/* Recipient row */}
+          <View style={s.recipientSection}>
+            <View style={s.recipientIconWrap}>
+              <Text style={s.recipientIcon}>👤</Text>
+            </View>
+            <TextInput
+              style={s.recipientInput}
+              placeholder="Recipient phone number"
+              placeholderTextColor="#A0AEC0"
+              value={toPhone}
+              onChangeText={setToPhone}
+              keyboardType="phone-pad"
+              autoCorrect={false}
+            />
+            <TouchableOpacity
+              style={s.addRecipientBtn}
+              onPress={() => navigation.navigate('Recipients', { country_name: destCountry.name, to_phone: toPhone })}
+              activeOpacity={0.7}
+            >
+              <UserPlus size={18} color={TEAL} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Verified badge */}
+          {quoteLoading && (
+            <View style={s.statusRow}>
+              <Spinner size="sm" color={TEAL} />
+              <Text style={s.statusText}>Verifying recipient…</Text>
+            </View>
+          )}
+          {!quoteLoading && quote?.recipient_found && (
+            <View style={s.statusRow}>
+              <CheckCircle size={14} color="#10B981" />
+              <Text style={[s.statusText, { color: '#10B981' }]}>{quote.recipient_name} · Verified</Text>
             </View>
           )}
 
-          {/* Recent recipients */}
-          {recipients.length > 0 && (
-            <View>
-              <View style={s.sectionRow}>
-                <Text style={s.sectionLabel}>Recent</Text>
-                <TouchableOpacity onPress={() => navigation.navigate('Recipients')}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                    <Users size={12} color="#4F46E5" />
-                    <Text style={s.manageLink}>Manage</Text>
-                  </View>
-                </TouchableOpacity>
+          <View style={s.cardDivider} />
+
+          {/* Amount inputs */}
+          <View style={s.amountSection}>
+            {/* You send */}
+            <View style={s.amountCol}>
+              <Text style={s.amountLabel}>YOU SEND</Text>
+              <View style={s.amountInputRow}>
+                <Text style={s.currencySymbol}>{CURRENCY_SYMBOLS[senderCcy] || senderCcy}</Text>
+                <TextInput
+                  style={s.amountInput}
+                  placeholder="0"
+                  placeholderTextColor="#CBD5E0"
+                  keyboardType="decimal-pad"
+                  value={amount}
+                  onChangeText={setAmount}
+                />
               </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
-                {recipients.map(r => {
-                  const initials = (r.full_name || r.phone_number).split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
-                  return (
-                    <TouchableOpacity key={r.id} style={[s.recipientChip, toPhone === r.phone_number && s.recipientChipActive]} onPress={() => {
-                      setToPhone(r.phone_number)
-                      // Auto-select destination country from recipient's saved country
-                      const match = DEST_COUNTRIES.find(c => c.name === r.country_name)
-                      if (match) setDestCountry(match)
-                    }}>
-                      <View style={[s.recipientAvatar, { backgroundColor: r.avatar_color || '#4F46E5' }]}>
-                        <Text style={s.recipientInitials}>{initials}</Text>
-                      </View>
-                      <Text style={s.recipientName} numberOfLines={1}>{r.full_name || r.phone_number}</Text>
-                    </TouchableOpacity>
-                  )
-                })}
-              </ScrollView>
+              <Text style={s.amountCcy}>{senderCcy}</Text>
             </View>
-          )}
 
-          {/* To phone */}
-          <Text style={s.inputLabel}>To Phone Number</Text>
-          <TextInput style={s.input} placeholder="+221 77 000 00 00" placeholderTextColor="#9CA3AF" keyboardType="phone-pad" value={toPhone} onChangeText={setToPhone} />
-
-          {/* Quote info */}
-          {quoteLoading && <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 }}><Spinner size="sm" /><Text style={{ fontSize: 12, color: '#9CA3AF' }}>Verifying recipient…</Text></View>}
-          {quote?.recipient_found && (
-            <View style={s.verifiedBadge}>
-              <CheckCircle size={14} color="#16A34A" />
-              <Text style={s.verifiedText}>{quote.recipient_name} — wallet found</Text>
-            </View>
-          )}
-          {/* Wave check — shown when no Kalipeh account found */}
-          {waveCheckLoading && (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 }}>
-              <Spinner size="sm" />
-              <Text style={{ fontSize: 12, color: '#9CA3AF' }}>Checking Wave account…</Text>
-            </View>
-          )}
-          {waveCheck && !waveCheckLoading && (
-            <View style={[s.verifiedBadge, { backgroundColor: waveCheck.has_wave ? '#DBEAFE' : '#FEF3C7', padding: 8, borderRadius: 10, marginTop: 6 }]}>
-              {waveCheck.has_wave
-                ? <><Zap size={14} color="#2563EB" /><Text style={[s.verifiedText, { color: '#2563EB' }]}>Wave account found — will send via Wave</Text></>
-                : <><Text style={[s.verifiedText, { color: '#D97706' }]}>No Kalipeh or Wave account found</Text></>
-              }
-            </View>
-          )}
-
-          {/* Destination country */}
-          <Text style={[s.inputLabel, { marginTop: 16 }]}>Destination Country</Text>
-          <TouchableOpacity style={s.countryPicker} onPress={() => setShowCountryPicker(!showCountryPicker)}>
-            <Text style={{ fontSize: 20 }}>{destCountry.flag}</Text>
-            <Text style={s.countryName}>{destCountry.name}</Text>
-            <Text style={s.currencyCode}>{destCcy}</Text>
-            <ChevronDown size={16} color="#9CA3AF" />
-          </TouchableOpacity>
-          {showCountryPicker && (
-            <View style={s.pickerDropdown}>
-              <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
-                {DEST_COUNTRIES.map(c => (
-                  <TouchableOpacity key={c.name} style={s.pickerOption} onPress={() => { setDestCountry(c); setShowCountryPicker(false) }}>
-                    <Text style={{ fontSize: 16 }}>{c.flag}</Text>
-                    <Text style={{ fontSize: 14, flex: 1, color: '#111827', fontWeight: '500' }}>{c.name}</Text>
-                    <Text style={{ fontSize: 12, color: '#9CA3AF' }}>{c.currency}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-          )}
-
-          {/* Amount */}
-          <Text style={[s.inputLabel, { marginTop: 16 }]}>Amount ({senderCcy})</Text>
-          <TextInput style={s.input} placeholder="0.00" placeholderTextColor="#9CA3AF" keyboardType="decimal-pad" value={amount} onChangeText={setAmount} />
-
-          {/* Fee summary */}
-          {sendAmt > 0 && (
-            <View style={s.feeCard}>
-              <FeeRow label="Fee (1.5%)" value={fmt(fee, senderCcy)} />
-              <FeeRow label="Net sent" value={fmt(netAmt, senderCcy)} />
-              <View style={s.feeDivider} />
-              <FeeRow
-                label={`Recipient gets (${destCcy})`}
-                value={rateLoading ? '…' : receivedAmt != null ? fmt(receivedAmt, destCcy) : '—'}
-                highlight
-              />
-              {effectiveRate && senderCcy !== destCcy && (
-                <Text style={s.rateHint}>Rate: 1 {senderCcy} = {effectiveRate.toFixed(4)} {destCcy}</Text>
-              )}
-            </View>
-          )}
-
-          {/* Alternate delivery — shown when no Kalipeh account found */}
-          {quote && !quote.recipient_found && toPhone.length > 5 && sendAmt > 0 && (
-            <View style={{ marginTop: 16, gap: 10 }}>
-              <Text style={[s.inputLabel, { textAlign: 'center', textTransform: 'uppercase', letterSpacing: 0.5, fontSize: 11, color: '#9CA3AF' }]}>No account — choose delivery</Text>
-              {waveCheck?.has_wave ? (
-                <>
-                  <WaveSection toPhone={toPhone} amount={sendAmt} destCountry={destCountry} receivedAmt={receivedAmt} defaultOpen onSuccess={r => setResult(r)} />
-                  <CashPickupSection toPhone={toPhone} amount={sendAmt} sendCcy={senderCcy} destCountry={destCountry} receivedAmt={receivedAmt} fee={fee} onSuccess={r => setResult(r)} />
-                </>
-              ) : (
-                <>
-                  <CashPickupSection toPhone={toPhone} amount={sendAmt} sendCcy={senderCcy} destCountry={destCountry} receivedAmt={receivedAmt} fee={fee} onSuccess={r => setResult(r)} />
-                  <WaveSection toPhone={toPhone} amount={sendAmt} destCountry={destCountry} receivedAmt={receivedAmt} onSuccess={r => setResult(r)} />
-                </>
-              )}
-            </View>
-          )}
-
-          {/* Description */}
-          <Text style={[s.inputLabel, { marginTop: 16 }]}>Reason (optional)</Text>
-          <TextInput style={s.input} placeholder="Rent, groceries…" placeholderTextColor="#9CA3AF" value={description} onChangeText={setDescription} />
-
-          {/* Payment method selector */}
-          {(
-            <View style={{ marginTop: 16 }}>
-              <Text style={s.inputLabel}>Fund transfer with</Text>
-              <View style={s.pmRow}>
-                {/* Wallet tile */}
-                <TouchableOpacity style={[s.pmTile, paymentType === 'wallet' && s.pmTileActive]} onPress={() => switchPaymentType('wallet')} activeOpacity={0.8}>
-                  <Wallet size={22} color={paymentType === 'wallet' ? '#4F46E5' : '#9CA3AF'} />
-                  <Text style={[s.pmTileLabel, paymentType === 'wallet' && s.pmTileLabelActive]}>Wallet</Text>
-                  <Text style={s.pmTileSub} numberOfLines={1}>{wallet ? `${Number(wallet.balance).toLocaleString()} ${senderCcy}` : 'Balance'}</Text>
-                </TouchableOpacity>
-                {/* Credit Card tile */}
-                <TouchableOpacity style={[s.pmTile, paymentType === 'card' && s.pmTileActive]} onPress={() => switchPaymentType('card')} activeOpacity={0.8}>
-                  <CreditCard size={22} color={paymentType === 'card' ? '#4F46E5' : '#9CA3AF'} />
-                  <Text style={[s.pmTileLabel, paymentType === 'card' && s.pmTileLabelActive]}>Credit Card</Text>
-                  <Text style={s.pmTileSub}>{savedCards.length > 0 ? `${savedCards.length} saved` : 'Enter details'}</Text>
-                </TouchableOpacity>
-                {/* Bank ACH tile */}
-                <TouchableOpacity style={[s.pmTile, paymentType === 'ach' && s.pmTileActive]} onPress={() => switchPaymentType('ach')} activeOpacity={0.8}>
-                  <Building2 size={22} color={paymentType === 'ach' ? '#4F46E5' : '#9CA3AF'} />
-                  <Text style={[s.pmTileLabel, paymentType === 'ach' && s.pmTileLabelActive]}>Bank (ACH)</Text>
-                  <Text style={s.pmTileSub}>{savedACH.length > 0 ? `${savedACH.length} saved` : 'Enter details'}</Text>
-                </TouchableOpacity>
+            {/* Divider with arrow */}
+            <View style={s.arrowCol}>
+              <View style={s.arrowCircle}>
+                <ArrowRight size={16} color="#fff" />
               </View>
-
-              {/* Inline Credit Card form */}
-              {paymentType === 'card' && (
-                <View style={s.pmForm}>
-                  {savedCards.length > 0 && (
-                    <>
-                      {savedCards.map(m => (
-                        <TouchableOpacity key={m.id} style={[s.savedPmRow, selectedPmId === m.id && s.savedPmRowActive]} onPress={() => setSelectedPmId(m.id)}>
-                          <CreditCard size={14} color={selectedPmId === m.id ? '#4F46E5' : '#9CA3AF'} />
-                          <Text style={[s.savedPmLabel, selectedPmId === m.id && { color: '#4F46E5' }]}>{m.label}</Text>
-                          {selectedPmId === m.id && <CheckCircle size={14} color="#4F46E5" />}
-                        </TouchableOpacity>
-                      ))}
-                      <TouchableOpacity onPress={() => setSelectedPmId(selectedPmId ? null : (savedCards[0]?.id || null))} style={{ alignSelf: 'flex-start', marginBottom: 6 }}>
-                        <Text style={{ fontSize: 12, color: '#4F46E5', fontWeight: '600' }}>{selectedPmId ? '+ Use a different card' : '← Use saved card'}</Text>
-                      </TouchableOpacity>
-                    </>
-                  )}
-                  {!selectedPmId && (
-                    <View style={{ gap: 8 }}>
-                      <TextInput style={s.pmInput} placeholder="Card number" placeholderTextColor="#9CA3AF" keyboardType="number-pad" maxLength={19} value={cardNumber} onChangeText={v => setCardNumber(formatCardNumber(v))} />
-                      <View style={{ flexDirection: 'row', gap: 8 }}>
-                        <TextInput style={[s.pmInput, { flex: 1 }]} placeholder="MM/YY" placeholderTextColor="#9CA3AF" keyboardType="number-pad" maxLength={5} value={cardExpiry} onChangeText={v => setCardExpiry(formatExpiry(v))} />
-                        <TextInput style={[s.pmInput, { flex: 1 }]} placeholder="CVV" placeholderTextColor="#9CA3AF" keyboardType="number-pad" maxLength={4} secureTextEntry value={cardCvv} onChangeText={v => setCardCvv(v.replace(/\D/g, '').slice(0, 4))} />
-                      </View>
-                      <TextInput style={s.pmInput} placeholder="Cardholder name" placeholderTextColor="#9CA3AF" value={cardName} onChangeText={setCardName} />
-                    </View>
-                  )}
-                </View>
-              )}
-
-              {/* Inline Bank ACH form */}
-              {paymentType === 'ach' && (
-                <View style={s.pmForm}>
-                  {savedACH.length > 0 && (
-                    <>
-                      {savedACH.map(m => (
-                        <TouchableOpacity key={m.id} style={[s.savedPmRow, selectedPmId === m.id && s.savedPmRowActive]} onPress={() => setSelectedPmId(m.id)}>
-                          <Building2 size={14} color={selectedPmId === m.id ? '#4F46E5' : '#9CA3AF'} />
-                          <Text style={[s.savedPmLabel, selectedPmId === m.id && { color: '#4F46E5' }]}>{m.label}</Text>
-                          {selectedPmId === m.id && <CheckCircle size={14} color="#4F46E5" />}
-                        </TouchableOpacity>
-                      ))}
-                      <TouchableOpacity onPress={() => setSelectedPmId(selectedPmId ? null : (savedACH[0]?.id || null))} style={{ alignSelf: 'flex-start', marginBottom: 6 }}>
-                        <Text style={{ fontSize: 12, color: '#4F46E5', fontWeight: '600' }}>{selectedPmId ? '+ Use a different account' : '← Use saved account'}</Text>
-                      </TouchableOpacity>
-                    </>
-                  )}
-                  {!selectedPmId && (
-                    <View style={{ gap: 8 }}>
-                      <TextInput style={s.pmInput} placeholder="Account holder name" placeholderTextColor="#9CA3AF" value={achHolder} onChangeText={setAchHolder} />
-                      <TextInput style={s.pmInput} placeholder="Routing number (9 digits)" placeholderTextColor="#9CA3AF" keyboardType="number-pad" maxLength={9} value={achRouting} onChangeText={v => setAchRouting(v.replace(/\D/g, '').slice(0, 9))} />
-                      <TextInput style={s.pmInput} placeholder="Account number" placeholderTextColor="#9CA3AF" keyboardType="number-pad" value={achAccount} onChangeText={v => setAchAccount(v.replace(/\D/g, ''))} />
-                      <View style={s.pmSegmentRow}>
-                        <TouchableOpacity style={[s.pmSegment, achType === 'checking' && s.pmSegmentActive]} onPress={() => setAchType('checking')}>
-                          <Text style={[s.pmSegmentText, achType === 'checking' && s.pmSegmentTextActive]}>Checking</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={[s.pmSegment, achType === 'savings' && s.pmSegmentActive]} onPress={() => setAchType('savings')}>
-                          <Text style={[s.pmSegmentText, achType === 'savings' && s.pmSegmentTextActive]}>Savings</Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  )}
-                </View>
-              )}
             </View>
-          )}
 
-          <TouchableOpacity style={[s.btn, loading && s.btnDisabled]} onPress={submit} disabled={loading}>
+            {/* They receive */}
+            <View style={[s.amountCol, { alignItems: 'flex-end' }]}>
+              <Text style={s.amountLabel}>THEY GET</Text>
+              <Text style={s.receivedValue}>
+                {rateLoading ? '…' : receivedAmt != null
+                  ? receivedAmt.toLocaleString(undefined, { maximumFractionDigits: 2 })
+                  : '0'}
+              </Text>
+              <TouchableOpacity
+                style={s.currencySelectorPill}
+                onPress={() => setShowCountryPicker(v => !v)}
+                activeOpacity={0.8}
+              >
+                <Text style={s.currencySelectorText}>{destCcy}</Text>
+                <ChevronDown size={10} color={TEAL} />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Rate chip */}
+          <View style={s.rateChip}>
+            <Text style={s.rateChipText}>
+              1 {senderCcy} = {effectiveRate ? effectiveRate.toFixed(4) : '—'} {destCcy}
+            </Text>
+            <View style={s.rateChipDot} />
+            <Text style={s.rateChipText}>
+              Fee {sendAmt > 0 ? fmt(fee, senderCcy) : '0.00'}
+            </Text>
+          </View>
+
+        </View>
+
+        {/* ── CTA button ── */}
+        <View style={s.ctaWrap}>
+          <TouchableOpacity
+            style={[s.ctaBtn, (!isValid || loading) && s.ctaBtnOff]}
+            onPress={handleContinue}
+            disabled={!isValid || loading}
+            activeOpacity={0.88}
+          >
             {loading
-              ? <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}><Spinner size="sm" color="#fff" /><Text style={s.btnText}>Sending…</Text></View>
-              : <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}><Send size={16} color="#fff" /><Text style={s.btnText}>Send Money</Text></View>
+              ? <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <Spinner size="sm" color={isValid ? '#fff' : '#AAA'} />
+                  <Text style={[s.ctaBtnText, !isValid && s.ctaBtnTextOff]}>Verifying…</Text>
+                </View>
+              : <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <Text style={[s.ctaBtnText, !isValid && s.ctaBtnTextOff]}>Continue to send</Text>
+                  {isValid && <ArrowRight size={18} color="#fff" />}
+                </View>
             }
           </TouchableOpacity>
+
+          {/* Trust chips */}
+          <View style={s.trustRow}>
+            <View style={s.trustChip}>
+              <Shield size={12} color="#10B981" />
+              <Text style={s.trustText}>Secure</Text>
+            </View>
+            <View style={s.trustChip}>
+              <Clock size={12} color="#F59E0B" />
+              <Text style={s.trustText}>Under a minute</Text>
+            </View>
+            <View style={s.trustChip}>
+              <Zap size={12} color={TEAL} />
+              <Text style={s.trustText}>1.5% fee</Text>
+            </View>
+          </View>
         </View>
+
+        {/* ── Wave promo ── */}
+        <View style={s.promoCard}>
+          <View style={s.promoLeft}>
+            <Text style={s.promoTitle}>Rapid, secure{'\n'}transfer</Text>
+            <Text style={s.promoSub}>Via Wave mobile wallets & agents</Text>
+          </View>
+          <View style={s.promoRight}>
+            <View style={s.waveIconBox}>
+              <Text style={{ fontSize: 28 }}>🐧</Text>
+            </View>
+            <Text style={s.waveWord}>wave</Text>
+          </View>
+        </View>
+
+        {/* ── Recent transactions ── */}
+        <View style={s.txSection}>
+          <View style={s.txHeader}>
+            <Text style={s.txTitle}>Recent</Text>
+            <TouchableOpacity onPress={() => navigation.navigate('Transactions')} activeOpacity={0.7}>
+              <Text style={s.seeAll}>See all</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={s.txCard}>
+            {transactions.length === 0
+              ? <Text style={s.txEmpty}>No transactions yet</Text>
+              : transactions.map((tx, i) => <TxRow key={tx.id} tx={tx} last={i === transactions.length - 1} />)
+            }
+          </View>
+        </View>
+
       </ScrollView>
+
+      {/* ── Confirmation bottom sheet ── */}
+      <Modal
+        visible={showConfirm}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowConfirm(false)}
+      >
+        <View style={cs.overlay}>
+          <View style={[cs.sheet, { paddingBottom: insets.bottom + 20 }]}>
+
+            {/* Close */}
+            <TouchableOpacity style={cs.closeBtn} onPress={() => setShowConfirm(false)} activeOpacity={0.7}>
+              <Text style={cs.closeX}>✕</Text>
+            </TouchableOpacity>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+
+              {/* Recipient */}
+              <ConfirmRow label="Recipient" noDivider={false}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', flex: 1 }}>
+                  <View>
+                    <Text style={cs.valueMain}>{quote?.recipient_name || toPhone}</Text>
+                    <Text style={cs.valueSub}>{toPhone}</Text>
+                  </View>
+                  <Text style={{ fontSize: 24 }}>{destCountry.flag}</Text>
+                </View>
+              </ConfirmRow>
+
+              {/* Transfer Amount */}
+              <ConfirmRow label="Transfer Amount">
+                <Text style={cs.valueMain}>{sendAmt.toFixed(2)} {senderCcy}</Text>
+              </ConfirmRow>
+
+              {/* Transfer Fees */}
+              <ConfirmRow label="Transfer Fees">
+                <Text style={cs.valueMain}>{fee.toFixed(2)} {senderCcy}</Text>
+              </ConfirmRow>
+
+              {/* Exchange Rate */}
+              <ConfirmRow label="Exchange Rate">
+                <Text style={cs.valueMain}>
+                  1 {senderCcy} = {effectiveRate ? effectiveRate.toFixed(2) : '—'} {destCcy}
+                </Text>
+              </ConfirmRow>
+
+              {/* Total to Recipient */}
+              <ConfirmRow label={`Total to\nRecipient`}>
+                <View>
+                  <Text style={cs.valueMain}>
+                    {receivedAmt != null ? receivedAmt.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—'} {destCcy}
+                  </Text>
+                  <Text style={cs.valueNote}>
+                    Your recipient may receive less due to fees charged by the mobile wallet provider, by a bank, and/or foreign taxes.
+                  </Text>
+                </View>
+              </ConfirmRow>
+
+              {/* Estimated Delivery */}
+              <ConfirmRow label={`Estimated\nDelivery By`}>
+                <Text style={cs.valueMain}>Under a minute</Text>
+              </ConfirmRow>
+
+              {/* Pay with */}
+              <ConfirmRow label="Pay with">
+                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, justifyContent: 'space-between' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={cs.walletBadge}><Text style={cs.walletBadgeText}>W</Text></View>
+                    <View>
+                      <Text style={cs.valueMain}>Wallet</Text>
+                      <Text style={cs.valueSub}>{wallet ? `${Number(wallet.balance).toLocaleString()} ${senderCcy}` : 'Balance'}</Text>
+                    </View>
+                  </View>
+                  <Text style={{ color: '#BBBBBB', fontSize: 18 }}>›</Text>
+                </View>
+              </ConfirmRow>
+
+              {/* Total Amount */}
+              <ConfirmRow label="Total Amount">
+                <Text style={[cs.valueMain, { fontWeight: '800', fontSize: 20 }]}>{sendAmt.toFixed(2)} {senderCcy}</Text>
+              </ConfirmRow>
+
+              {/* Fraud warning */}
+              <View style={cs.fraudBox}>
+                <Text style={cs.fraudText}>
+                  Please be sure you know your recipient. Fraudulent transactions may result in the loss of your money with no recourse. To report fraud or suspected fraud, call 701-515-4355.
+                </Text>
+              </View>
+
+            </ScrollView>
+
+            {/* Confirm button */}
+            <TouchableOpacity
+              style={[cs.confirmBtn, confirming && { opacity: 0.7 }]}
+              onPress={confirmTransfer}
+              disabled={confirming}
+              activeOpacity={0.85}
+            >
+              {confirming
+                ? <Spinner size="sm" color="#7A6000" />
+                : <Text style={cs.confirmBtnText}>Confirm transfer</Text>
+              }
+            </TouchableOpacity>
+
+          </View>
+        </View>
+      </Modal>
+
     </KeyboardAvoidingView>
   )
 }
 
-function FeeRow({ label, value, highlight }) {
+function TxRow({ tx }) {
+  const isDelivered = tx.status === 'completed'
+  const date = tx.created_at
+    ? new Date(tx.created_at).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })
+    : ''
   return (
-    <View style={s.feeRow}>
-      <Text style={[s.feeLabel, highlight && { fontWeight: '700', color: '#111827' }]}>{label}</Text>
-      <Text style={[s.feeValue, highlight && { fontWeight: '700', color: '#4F46E5', fontSize: 15 }]}>{value}</Text>
+    <View style={t.row}>
+      <View style={{ flex: 1 }}>
+        <Text style={t.name}>{tx.recipient_name || tx.to_phone || 'Unknown'}</Text>
+        <View style={t.meta}>
+          <Text style={t.date}>{date}</Text>
+          {isDelivered && (
+            <View style={t.badge}>
+              <Text style={t.badgeText}>DELIVERED</Text>
+            </View>
+          )}
+          {!isDelivered && tx.status && (
+            <View style={[t.badge, { backgroundColor: '#FEF9C3' }]}>
+              <Text style={[t.badgeText, { color: '#92400E' }]}>{tx.status.toUpperCase()}</Text>
+            </View>
+          )}
+        </View>
+      </View>
+      <View style={{ alignItems: 'flex-end' }}>
+        <Text style={t.amount}>
+          {tx.send_amount?.toLocaleString(undefined, { maximumFractionDigits: 2 })} {tx.send_currency}
+        </Text>
+        <Text style={t.subAmount}>
+          {tx.received_amount?.toLocaleString(undefined, { maximumFractionDigits: 2 })} {tx.recv_currency}
+        </Text>
+      </View>
     </View>
   )
 }
 
-function SummaryRow({ label, value, bold }) {
+function SuccessRow({ label, value, bold }) {
   return (
-    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 }}>
+    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
       <Text style={{ fontSize: 14, color: '#6B7280' }}>{label}</Text>
-      <Text style={{ fontSize: 14, fontWeight: bold ? '700' : '500', color: '#111827' }}>{value}</Text>
+      <Text style={{ fontSize: 14, fontWeight: bold ? '700' : '500', color: '#111' }}>{value}</Text>
     </View>
   )
 }
-
-function CashPickupSection({ toPhone, amount, sendCcy, destCountry, receivedAmt, fee, onSuccess }) {
-  const [open, setOpen] = useState(false)
-  const [recipientName, setRecipientName] = useState('')
-  const [agents, setAgents] = useState([])
-  const [selectedAgent, setSelectedAgent] = useState(null)
-  const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    if (!open) return
-    api.get(`/transfer/agents?country=${encodeURIComponent(destCountry.name)}`)
-      .then(({ data }) => {
-        setAgents(data.agents || [])
-        if (data.agents?.length > 0) setSelectedAgent(data.agents[0])
-      })
-      .catch(() => {})
-  }, [open, destCountry.name])
-
-  const submit = async () => {
-    if (!recipientName.trim()) return Toast.show({ type: 'error', text1: 'Enter recipient name' })
-    if (!selectedAgent) return Toast.show({ type: 'error', text1: 'Select a pickup location' })
-    setSaving(true)
-    try {
-      const { data } = await api.post('/transfer/cash-pickup', {
-        to_phone: toPhone, recipient_name: recipientName,
-        amount, recv_currency: destCountry.currency, agent_id: selectedAgent.id,
-      })
-      notifySender(data)
-      notifyRecipient(data, toPhone)
-      Toast.show({ type: 'success', text1: 'Cash pickup created!' })
-      onSuccess(data)
-    } catch (err) {
-      Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Failed to create cash pickup' })
-    } finally { setSaving(false) }
-  }
-
-  if (!open) {
-    return (
-      <TouchableOpacity style={cp.trigger} onPress={() => setOpen(true)} activeOpacity={0.8}>
-        <View style={cp.triggerIcon}><MapPin size={20} color="#fff" /></View>
-        <View style={{ flex: 1 }}>
-          <Text style={cp.triggerTitle}>Send as Cash Pickup</Text>
-          <Text style={cp.triggerSub}>Recipient collects cash at a local agent with a PIN code</Text>
-        </View>
-        <ChevronDown size={16} color="#D97706" />
-      </TouchableOpacity>
-    )
-  }
-
-  return (
-    <View style={cp.expanded}>
-      <View style={cp.header}>
-        <MapPin size={16} color="#fff" />
-        <Text style={cp.headerTitle}>Cash Pickup</Text>
-        <TouchableOpacity onPress={() => setOpen(false)}><ChevronDown size={16} color="rgba(255,255,255,0.7)" style={{ transform: [{ rotate: '180deg' }] }} /></TouchableOpacity>
-      </View>
-      <View style={{ padding: 12, gap: 10 }}>
-        <View style={cp.amountRow}>
-          <Text style={{ fontSize: 12, color: '#78716C' }}>They collect</Text>
-          <Text style={{ fontSize: 14, fontWeight: '700', color: '#92400E' }}>
-            {destCountry.flag} {receivedAmt?.toLocaleString(undefined, { maximumFractionDigits: 2 }) ?? '—'} {destCountry.currency}
-          </Text>
-        </View>
-        <TextInput style={cp.input} placeholder="Recipient full name" placeholderTextColor="#9CA3AF" value={recipientName} onChangeText={setRecipientName} />
-        <Text style={{ fontSize: 12, fontWeight: '500', color: '#92400E' }}>Pickup location · {destCountry.name}</Text>
-        {agents.length === 0
-          ? <Text style={{ fontSize: 12, color: '#D97706' }}>No agents available for this country yet</Text>
-          : agents.map(a => (
-            <TouchableOpacity key={a.id} style={[cp.agentRow, selectedAgent?.id === a.id && cp.agentRowActive]} onPress={() => setSelectedAgent(a)}>
-              <MapPin size={12} color="#D97706" />
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 12, fontWeight: '600', color: '#111827' }}>{a.name}</Text>
-                <Text style={{ fontSize: 11, color: '#6B7280' }}>{a.address}</Text>
-                <Text style={{ fontSize: 11, color: '#D97706', fontWeight: '500' }}>{a.phone}</Text>
-              </View>
-              <View style={[cp.radio, selectedAgent?.id === a.id && cp.radioActive]} />
-            </TouchableOpacity>
-          ))
-        }
-        <TouchableOpacity style={[cp.submitBtn, (saving || !recipientName.trim() || !selectedAgent) && { opacity: 0.5 }]} onPress={submit} disabled={saving || !recipientName.trim() || !selectedAgent}>
-          {saving ? <Spinner size="sm" color="#fff" /> : <><MapPin size={14} color="#fff" /><Text style={cp.submitBtnText}>Confirm Cash Pickup</Text></>}
-        </TouchableOpacity>
-      </View>
-    </View>
-  )
-}
-
-function WaveSection({ toPhone, amount, destCountry, receivedAmt, defaultOpen = false, onSuccess }) {
-  const [open, setOpen] = useState(defaultOpen)
-  const [wavePhone, setWavePhone] = useState(toPhone)
-  const [saving, setSaving] = useState(false)
-
-  const submit = async () => {
-    if (!wavePhone.trim()) return Toast.show({ type: 'error', text1: 'Enter Wave phone number' })
-    setSaving(true)
-    try {
-      const { data } = await api.post('/transfer/wave', {
-        to_phone: wavePhone, amount, recv_currency: destCountry.currency,
-      })
-      notifySender(data)
-      notifyRecipient(data, wavePhone)
-      Toast.show({ type: 'success', text1: 'Wave transfer sent!' })
-      onSuccess(data)
-    } catch (err) {
-      Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Wave transfer failed' })
-    } finally { setSaving(false) }
-  }
-
-  if (!open) {
-    return (
-      <TouchableOpacity style={wp.trigger} onPress={() => setOpen(true)} activeOpacity={0.8}>
-        <View style={wp.triggerIcon}><Zap size={20} color="#fff" /></View>
-        <View style={{ flex: 1 }}>
-          <Text style={wp.triggerTitle}>Send via Wave</Text>
-          <Text style={wp.triggerSub}>Deliver directly to recipient's Wave mobile money account</Text>
-        </View>
-        <ChevronDown size={16} color="#2563EB" />
-      </TouchableOpacity>
-    )
-  }
-
-  return (
-    <View style={wp.expanded}>
-      <View style={wp.header}>
-        <Zap size={16} color="#fff" />
-        <Text style={wp.headerTitle}>Wave Mobile Money</Text>
-        <TouchableOpacity onPress={() => setOpen(false)}><ChevronDown size={16} color="rgba(255,255,255,0.7)" style={{ transform: [{ rotate: '180deg' }] }} /></TouchableOpacity>
-      </View>
-      <View style={{ padding: 12, gap: 10 }}>
-        <View style={wp.amountRow}>
-          <Text style={{ fontSize: 12, color: '#6B7280' }}>They receive via Wave</Text>
-          <Text style={{ fontSize: 14, fontWeight: '700', color: '#1D4ED8' }}>
-            {destCountry.flag} {receivedAmt?.toLocaleString(undefined, { maximumFractionDigits: 2 }) ?? '—'} {destCountry.currency}
-          </Text>
-        </View>
-        <TextInput style={wp.input} placeholder="+221 77 000 00 00" placeholderTextColor="#9CA3AF" keyboardType="phone-pad" value={wavePhone} onChangeText={setWavePhone} />
-        <Text style={{ fontSize: 11, color: '#60A5FA' }}>Must be registered with Wave in {destCountry.name}</Text>
-        <TouchableOpacity style={[wp.submitBtn, (saving || !wavePhone.trim()) && { opacity: 0.5 }]} onPress={submit} disabled={saving || !wavePhone.trim()}>
-          {saving ? <Spinner size="sm" color="#fff" /> : <><Zap size={14} color="#fff" /><Text style={wp.submitBtnText}>Send via Wave</Text></>}
-        </TouchableOpacity>
-      </View>
-    </View>
-  )
-}
-
-const cp = StyleSheet.create({
-  trigger:      { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, borderRadius: 16, borderWidth: 2, borderColor: '#FCD34D', borderStyle: 'dashed', backgroundColor: '#FFFBEB' },
-  triggerIcon:  { width: 40, height: 40, backgroundColor: '#F59E0B', borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  triggerTitle: { fontSize: 14, fontWeight: '700', color: '#92400E' },
-  triggerSub:   { fontSize: 12, color: '#D97706', marginTop: 2 },
-  expanded:     { borderRadius: 16, borderWidth: 2, borderColor: '#FCD34D', overflow: 'hidden' },
-  header:       { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F59E0B', paddingHorizontal: 14, paddingVertical: 10 },
-  headerTitle:  { flex: 1, fontSize: 14, fontWeight: '700', color: '#fff' },
-  amountRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fff', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
-  input:        { backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, color: '#111827' },
-  agentRow:     { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 10, borderRadius: 12, borderWidth: 1, borderColor: '#FCD34D', backgroundColor: 'rgba(255,255,255,0.6)' },
-  agentRowActive:{ borderColor: '#F59E0B', backgroundColor: '#fff' },
-  radio:        { width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: '#D1D5DB', marginTop: 2 },
-  radioActive:  { borderColor: '#F59E0B', backgroundColor: '#F59E0B' },
-  submitBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#F59E0B', borderRadius: 12, paddingVertical: 12 },
-  submitBtnText:{ fontSize: 14, fontWeight: '700', color: '#fff' },
-})
-
-const wp = StyleSheet.create({
-  trigger:      { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, borderRadius: 16, borderWidth: 2, borderColor: '#93C5FD', borderStyle: 'dashed', backgroundColor: '#EFF6FF' },
-  triggerIcon:  { width: 40, height: 40, backgroundColor: '#3B82F6', borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  triggerTitle: { fontSize: 14, fontWeight: '700', color: '#1E40AF' },
-  triggerSub:   { fontSize: 12, color: '#3B82F6', marginTop: 2 },
-  expanded:     { borderRadius: 16, borderWidth: 2, borderColor: '#93C5FD', overflow: 'hidden' },
-  header:       { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#3B82F6', paddingHorizontal: 14, paddingVertical: 10 },
-  headerTitle:  { flex: 1, fontSize: 14, fontWeight: '700', color: '#fff' },
-  amountRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fff', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
-  input:        { backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, color: '#111827' },
-  submitBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#3B82F6', borderRadius: 12, paddingVertical: 12 },
-  submitBtnText:{ fontSize: 14, fontWeight: '700', color: '#fff' },
-})
 
 const s = StyleSheet.create({
-  header:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingBottom: 12 },
-  backBtn:       { width: 36, height: 36, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
-  headerTitle:   { fontSize: 18, fontWeight: '700', color: '#111827' },
-  content:       { paddingHorizontal: 20, paddingBottom: 40 },
-  balanceChip:   { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#EEF2FF', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 20 },
-  balanceLabel:  { fontSize: 13, color: '#6366F1', fontWeight: '500' },
-  balanceValue:  { fontSize: 14, fontWeight: '700', color: '#4338CA' },
-  sectionRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  sectionLabel:  { fontSize: 11, fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.5 },
-  manageLink:    { fontSize: 12, color: '#4F46E5', fontWeight: '600' },
-  recipientChip: { alignItems: 'center', marginRight: 12, width: 72 },
-  recipientChipActive: { opacity: 1 },
-  recipientAvatar:{ width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
-  recipientInitials:{ fontSize: 14, fontWeight: '700', color: '#fff' },
-  recipientName: { fontSize: 11, color: '#374151', fontWeight: '500', textAlign: 'center' },
-  inputLabel:    { fontSize: 14, fontWeight: '500', color: '#374151', marginBottom: 6 },
-  input:         { backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 13, fontSize: 15, color: '#111827', marginBottom: 4 },
-  verifiedBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6, marginBottom: 4 },
-  verifiedText:  { fontSize: 13, color: '#16A34A', fontWeight: '500' },
-  countryPicker: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 13 },
-  countryName:   { flex: 1, fontSize: 14, fontWeight: '600', color: '#111827' },
-  currencyCode:  { fontSize: 13, fontWeight: '700', color: '#4F46E5' },
-  pickerDropdown:{ backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#E5E7EB', marginTop: 4, overflow: 'hidden' },
-  pickerOption:  { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 10 },
-  feeCard:       { backgroundColor: '#F9FAFB', borderRadius: 14, padding: 14, marginTop: 12 },
-  feeRow:        { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 },
-  feeLabel:      { fontSize: 13, color: '#6B7280' },
-  feeValue:      { fontSize: 13, fontWeight: '600', color: '#374151' },
-  feeDivider:    { height: 1, backgroundColor: '#E5E7EB', marginVertical: 6 },
-  rateHint:      { fontSize: 11, color: '#9CA3AF', marginTop: 4 },
-  btn:           { backgroundColor: '#4F46E5', borderRadius: 14, paddingVertical: 15, alignItems: 'center', marginTop: 24, flexDirection: 'row', justifyContent: 'center', gap: 8 },
-  btnDisabled:   { opacity: 0.7 },
-  btnText:       { color: '#fff', fontSize: 16, fontWeight: '700' },
-  // Payment method tiles
-  pmRow:           { flexDirection: 'row', gap: 8, marginBottom: 4 },
-  pmTile:          { flex: 1, alignItems: 'center', gap: 4, padding: 12, borderRadius: 14, borderWidth: 1.5, borderColor: '#E5E7EB', backgroundColor: '#fff' },
-  pmTileActive:    { borderColor: '#4F46E5', backgroundColor: '#EEF2FF' },
-  pmTileLabel:     { fontSize: 11, fontWeight: '700', color: '#9CA3AF', textAlign: 'center' },
-  pmTileLabelActive:{ color: '#4F46E5' },
-  pmTileSub:       { fontSize: 10, color: '#9CA3AF', textAlign: 'center' },
-  pmForm:          { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1.5, borderColor: '#C7D2FE', padding: 12, gap: 0, marginTop: 6 },
-  pmInput:         { backgroundColor: '#F9FAFB', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11, fontSize: 14, color: '#111827' },
-  savedPmRow:      { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, paddingHorizontal: 2, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
-  savedPmRowActive:{ backgroundColor: '#EEF2FF', borderRadius: 10, paddingHorizontal: 8, borderBottomWidth: 0, marginBottom: 2 },
-  savedPmLabel:    { flex: 1, fontSize: 13, fontWeight: '500', color: '#374151' },
-  pmSegmentRow:    { flexDirection: 'row', backgroundColor: '#F3F4F6', borderRadius: 10, padding: 3, gap: 3 },
-  pmSegment:       { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8 },
-  pmSegmentActive: { backgroundColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 2, elevation: 1 },
-  pmSegmentText:   { fontSize: 13, fontWeight: '600', color: '#9CA3AF' },
-  pmSegmentTextActive:{ color: '#4F46E5' },
-  // Success screen
-  successContainer: { flex: 1, backgroundColor: '#F9FAFB', paddingHorizontal: 24, alignItems: 'center', paddingBottom: 40 },
-  successIcon:   { width: 80, height: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
-  successTitle:  { fontSize: 22, fontWeight: '700', color: '#111827', textAlign: 'center' },
-  successSub:    { fontSize: 14, color: '#6B7280', textAlign: 'center', marginTop: 6, marginBottom: 20 },
-  pickupBox:     { backgroundColor: '#D97706', borderRadius: 20, paddingHorizontal: 24, paddingVertical: 20, alignItems: 'center', marginBottom: 12, width: '100%' },
-  pickupLabel:   { fontSize: 11, color: 'rgba(255,255,255,0.8)', fontWeight: '600', letterSpacing: 2, marginBottom: 8 },
-  pickupCode:    { fontSize: 36, fontWeight: '700', color: '#fff', letterSpacing: 10, fontFamily: 'monospace' },
-  resultAmountBox:{ borderRadius: 20, paddingHorizontal: 24, paddingVertical: 20, alignItems: 'center', marginBottom: 16, width: '100%' },
-  resultAmountLabel:{ fontSize: 12, color: 'rgba(255,255,255,0.7)', marginBottom: 6 },
-  resultAmount:  { fontSize: 36, fontWeight: '700', color: '#fff' },
-  summaryCard:   { backgroundColor: '#fff', borderRadius: 20, padding: 16, width: '100%', marginBottom: 16 },
+  // ── Header band ──────────────────────────────────────────────────────────────
+  headerBand: {
+    backgroundColor: '#0A1628',
+    paddingHorizontal: 20,
+    paddingBottom: 52,
+  },
+  topRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    marginBottom: 28,
+  },
+  avatar: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.25)',
+  },
+  avatarText: { fontSize: 15, fontWeight: '700', color: '#fff' },
+  inviteBtn: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#F5C842',
+    borderRadius: 24, paddingHorizontal: 16, paddingVertical: 9,
+  },
+  inviteBtnText: { fontSize: 13, fontWeight: '700', color: '#0A1628' },
+
+  titleRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end',
+  },
+  titleSub: { fontSize: 12, fontWeight: '600', color: 'rgba(255,255,255,0.5)', letterSpacing: 1.5, marginBottom: 4, textTransform: 'uppercase' },
+  title:    { fontSize: 26, fontWeight: '800', color: '#fff' },
+  countryPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
+  },
+  countryPillText: { fontSize: 13, fontWeight: '600', color: '#fff' },
+
+  // ── Country dropdown ─────────────────────────────────────────────────────────
+  countryDropdown: {
+    backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#E5E7EB',
+    marginHorizontal: 16, marginTop: -8, marginBottom: 8, overflow: 'hidden', zIndex: 99,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.12, shadowRadius: 14, elevation: 8,
+  },
+  countryOption:      { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  countryOptionActive:{ backgroundColor: '#F0FAF9' },
+  countryOptionName:  { flex: 1, fontSize: 14, fontWeight: '600', color: '#111' },
+  countryOptionCcy:   { fontSize: 12, color: '#9CA3AF', fontWeight: '500' },
+
+  // ── Main card ────────────────────────────────────────────────────────────────
+  mainCard: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    marginHorizontal: 16,
+    marginTop: -36,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 16,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.1, shadowRadius: 20, elevation: 10,
+  },
+
+  // Recipient row
+  recipientSection: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10,
+  },
+  recipientIconWrap: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: '#F0FAF9',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  recipientIcon:  { fontSize: 20 },
+  recipientInput: { flex: 1, fontSize: 16, color: '#111', paddingVertical: 0 },
+  addRecipientBtn:{ padding: 8 },
+
+  // Status row (verified/loading)
+  statusRow:  { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6, paddingLeft: 52 },
+  statusText: { fontSize: 13, color: '#9CA3AF' },
+
+  cardDivider: { height: 1, backgroundColor: '#F3F4F6', marginVertical: 16 },
+
+  // Amount columns
+  amountSection: {
+    flexDirection: 'row', alignItems: 'center', gap: 0, marginBottom: 14,
+  },
+  amountCol:    { flex: 1 },
+  amountLabel:  { fontSize: 10, fontWeight: '700', color: '#9CA3AF', letterSpacing: 1.2, marginBottom: 8 },
+  amountInputRow:{ flexDirection: 'row', alignItems: 'baseline', gap: 2 },
+  currencySymbol:{ fontSize: 18, fontWeight: '700', color: '#111' },
+  amountInput:  { fontSize: 26, fontWeight: '800', color: '#111', minWidth: 60, paddingVertical: 0 },
+  amountCcy:    { fontSize: 12, color: '#9CA3AF', marginTop: 4, fontWeight: '500' },
+
+  // Arrow column
+  arrowCol: { width: 48, alignItems: 'center', justifyContent: 'center', paddingTop: 14 },
+  arrowCircle: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: TEAL,
+    alignItems: 'center', justifyContent: 'center',
+  },
+
+  // They get
+  receivedValue: { fontSize: 26, fontWeight: '800', color: '#111' },
+  currencySelectorPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    alignSelf: 'flex-end',
+    backgroundColor: '#F0FAF9',
+    borderRadius: 12, paddingHorizontal: 8, paddingVertical: 4,
+    marginTop: 4,
+    borderWidth: 1, borderColor: '#C9EDE9',
+  },
+  currencySelectorText: { fontSize: 12, fontWeight: '700', color: TEAL },
+
+  // Rate chip
+  rateChip: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 10, paddingHorizontal: 14, paddingVertical: 9,
+  },
+  rateChipText: { fontSize: 12, color: '#6B7280', fontWeight: '500' },
+  rateChipDot:  { width: 4, height: 4, borderRadius: 2, backgroundColor: '#D1D5DB' },
+
+  // ── CTA ──────────────────────────────────────────────────────────────────────
+  ctaWrap: { paddingHorizontal: 16, marginTop: 18, marginBottom: 18 },
+  ctaBtn:  {
+    backgroundColor: TEAL,
+    borderRadius: 32, paddingVertical: 18,
+    alignItems: 'center', justifyContent: 'center',
+    flexDirection: 'row', gap: 10,
+    shadowColor: TEAL, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 14, elevation: 6,
+  },
+  ctaBtnOff:     { backgroundColor: '#E5E5E5', shadowOpacity: 0 },
+  ctaBtnText:    { fontSize: 17, fontWeight: '700', color: '#fff' },
+  ctaBtnTextOff: { color: '#AAAAAA' },
+
+  // Trust chips
+  trustRow:  { flexDirection: 'row', justifyContent: 'center', gap: 10, marginTop: 14 },
+  trustChip: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  trustText: { fontSize: 12, color: '#6B7280', fontWeight: '500' },
+
+  // ── Wave promo card ───────────────────────────────────────────────────────────
+  promoCard: {
+    marginHorizontal: 16, marginBottom: 18,
+    backgroundColor: '#0A1628',
+    borderRadius: 20, padding: 20,
+    flexDirection: 'row', alignItems: 'center',
+  },
+  promoLeft:  { flex: 1 },
+  promoRight: { alignItems: 'center', gap: 6 },
+  promoTitle: { fontSize: 18, fontWeight: '800', color: '#fff', marginBottom: 4, lineHeight: 24 },
+  promoSub:   { fontSize: 13, color: 'rgba(255,255,255,0.55)', lineHeight: 18 },
+  waveIconBox:{
+    width: 56, height: 56, borderRadius: 16,
+    backgroundColor: '#1BAEC2',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  waveWord: { fontSize: 14, fontWeight: '800', color: '#fff', letterSpacing: 1 },
+
+  // ── Transactions ──────────────────────────────────────────────────────────────
+  txSection: { marginHorizontal: 16, marginBottom: 24 },
+  txHeader:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  txTitle:   { fontSize: 18, fontWeight: '800', color: '#111' },
+  seeAll:    { fontSize: 14, fontWeight: '600', color: TEAL },
+  txCard:    {
+    backgroundColor: '#fff', borderRadius: 16,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
+    overflow: 'hidden',
+  },
+  txEmpty: { fontSize: 13, color: '#BBBBBB', textAlign: 'center', paddingVertical: 24 },
+
+  // ── Success screen ────────────────────────────────────────────────────────────
+  successWrap:    { flex: 1, backgroundColor: '#fff', paddingHorizontal: 24, alignItems: 'center' },
+  successIconWrap:{ width: 90, height: 90, borderRadius: 45, backgroundColor: LIGHT_TEAL, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
+  successTitle:   { fontSize: 26, fontWeight: '800', color: '#111', marginBottom: 8 },
+  successSub:     { fontSize: 16, color: '#6B7280', textAlign: 'center', lineHeight: 24, marginBottom: 28 },
+  successCard:    { backgroundColor: '#F9FAFB', borderRadius: 20, padding: 20, width: '100%', marginBottom: 28 },
+  successBtn:     { backgroundColor: TEAL, borderRadius: 32, paddingVertical: 16, paddingHorizontal: 40, alignItems: 'center' },
+  successBtnText: { fontSize: 16, fontWeight: '700', color: '#fff' },
+})
+
+const t = StyleSheet.create({
+  row:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  name:     { fontSize: 15, fontWeight: '700', color: '#111', marginBottom: 4 },
+  meta:     { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  date:     { fontSize: 13, color: '#999' },
+  badge:    { backgroundColor: LIGHT_TEAL, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3 },
+  badgeText:{ fontSize: 11, fontWeight: '700', color: TEAL_TEXT, letterSpacing: 0.5 },
+  amount:   { fontSize: 15, fontWeight: '700', color: '#111', textAlign: 'right' },
+  subAmount:{ fontSize: 13, color: '#999', textAlign: 'right', marginTop: 3 },
+})
+
+// ── Confirmation sheet helper ─────────────────────────────────────────────────
+function ConfirmRow({ label, children }) {
+  return (
+    <View style={cs.row}>
+      <Text style={cs.label}>{label}</Text>
+      <View style={cs.valueWrap}>{children}</View>
+    </View>
+  )
+}
+
+const cs = StyleSheet.create({
+  overlay:   { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.45)' },
+  sheet:     {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: 24, paddingTop: 20,
+    maxHeight: '92%',
+  },
+
+  closeBtn:  { alignSelf: 'flex-end', padding: 6, marginBottom: 12 },
+  closeX:    { fontSize: 20, color: '#333', fontWeight: '600' },
+
+  row:       {
+    flexDirection: 'row', alignItems: 'flex-start',
+    paddingVertical: 18,
+    borderBottomWidth: 1, borderBottomColor: '#ECECEC',
+  },
+  label:     { width: 110, fontSize: 14, color: '#888', lineHeight: 20 },
+  valueWrap: { flex: 1 },
+  valueMain: { fontSize: 18, fontWeight: '600', color: '#111' },
+  valueSub:  { fontSize: 13, color: '#888', marginTop: 2 },
+  valueNote: { fontSize: 12, color: '#999', marginTop: 6, lineHeight: 17 },
+
+  walletBadge:     { width: 36, height: 24, backgroundColor: '#1A1F71', borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
+  walletBadgeText: { color: '#fff', fontWeight: '800', fontSize: 13 },
+
+  fraudBox:  { backgroundColor: '#F2F0EC', borderRadius: 10, padding: 16, marginTop: 20, marginBottom: 16 },
+  fraudText: { fontSize: 13, color: '#555', lineHeight: 20 },
+
+  confirmBtn:     { backgroundColor: '#F5C842', borderRadius: 32, paddingVertical: 18, alignItems: 'center', marginTop: 8 },
+  confirmBtnText: { fontSize: 18, fontWeight: '700', color: '#5A4500' },
 })

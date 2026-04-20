@@ -20,12 +20,11 @@ const BRAND_LOGO = {
 }
 
 const BASE_FORM_TABS = [
-  { id: 'card',          label: 'Card',      icon: '💳' },
-  { id: 'bank_transfer', label: 'Bank',      icon: '🏦' },
-  { id: 'ach',           label: 'ACH',       icon: '🏛️' },
-  { id: 'paypal',        label: 'PayPal',    icon: '🅿️' },
-  { id: 'apple_pay',     label: 'Apple Pay', icon: '🍎' },
-  { id: 'google_pay',    label: 'Google Pay',icon: '🇬' },
+  { id: 'card',       label: 'Card',       icon: '💳' },
+  { id: 'ach',        label: 'Bank (ACH)', icon: '🏛️' },
+  { id: 'paypal',     label: 'PayPal',     icon: '🅿️' },
+  { id: 'apple_pay',  label: 'Apple Pay',  icon: '🍎' },
+  { id: 'google_pay', label: 'Google Pay', icon: '🇬' },
 ]
 
 function detectBrand(n) {
@@ -52,8 +51,7 @@ export default function PaymentMethodsScreen() {
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
   const { user } = useAuth()
-  const isUSUser = user?.home_country === 'United States'
-  const FORM_TABS = isUSUser ? BASE_FORM_TABS : BASE_FORM_TABS.filter(t => t.id !== 'ach')
+  const FORM_TABS = BASE_FORM_TABS
   const [methods, setMethods] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
@@ -126,8 +124,7 @@ export default function PaymentMethodsScreen() {
                   ))}
                 </View>
                 {activeTab === 'card' && <AddCardForm onDone={() => { setShowAdd(false); load() }} />}
-                {activeTab === 'bank_transfer' && <AddBankForm onDone={() => { setShowAdd(false); load() }} />}
-                {activeTab === 'ach' && <AddACHForm onDone={() => { setShowAdd(false); load() }} />}
+                {activeTab === 'ach'  && <AddACHForm onDone={() => { setShowAdd(false); load() }} />}
                 {activeTab === 'paypal' && <AddPayPalForm onDone={() => { setShowAdd(false); load() }} />}
                 {(activeTab === 'apple_pay' || activeTab === 'google_pay') && <AddDigitalWalletForm type={activeTab} onDone={() => { setShowAdd(false); load() }} />}
               </View>
@@ -151,7 +148,9 @@ export default function PaymentMethodsScreen() {
                 </View>
               ) : (
                 <View style={s.iconBadge}>
-                  {m.type === 'bank_transfer' ? <Building2 size={16} color="#374151" /> : <Smartphone size={16} color="#374151" />}
+                  {m.type === 'ach' || m.type === 'bank_transfer'
+                    ? <Building2 size={16} color="#374151" />
+                    : <Smartphone size={16} color="#374151" />}
                 </View>
               )}
               <View style={{ flex: 1 }}>
@@ -230,36 +229,6 @@ function AddCardForm({ onDone }) {
   )
 }
 
-function AddBankForm({ onDone }) {
-  const [bankName, setBankName] = useState('')
-  const [account, setAccount] = useState('')
-  const [holderName, setHolderName] = useState('')
-  const [isDefault, setIsDefault] = useState(false)
-  const [saving, setSaving] = useState(false)
-
-  const submit = async () => {
-    setSaving(true)
-    try {
-      await api.post('/payment-methods/bank', { bank_name: bankName, account_number: account.replace(/[\s-]/g, ''), holder_name: holderName, set_default: isDefault })
-      Toast.show({ type: 'success', text1: 'Bank account added!' })
-      onDone()
-    } catch (err) {
-      Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Failed' })
-    } finally { setSaving(false) }
-  }
-
-  return (
-    <View style={{ gap: 10 }}>
-      <TextInput style={sF.input} placeholder="Bank name (e.g. Chase, BNP Paribas)" placeholderTextColor="#9CA3AF" value={bankName} onChangeText={setBankName} />
-      <TextInput style={sF.input} placeholder="IBAN / Account number" placeholderTextColor="#9CA3AF" value={account} onChangeText={setAccount} />
-      <TextInput style={sF.input} placeholder="Account holder name" placeholderTextColor="#9CA3AF" value={holderName} onChangeText={setHolderName} />
-      <View style={sF.switchRow}><Text style={sF.switchLabel}>Set as default</Text><Switch value={isDefault} onValueChange={setIsDefault} trackColor={{ true: '#4F46E5' }} /></View>
-      <TouchableOpacity style={[sF.btn, saving && sF.btnDisabled]} onPress={submit} disabled={saving}>
-        {saving ? <Spinner size="sm" color="#fff" /> : <Text style={sF.btnText}>Add Bank Account</Text>}
-      </TouchableOpacity>
-    </View>
-  )
-}
 
 function AddACHForm({ onDone }) {
   const [holderName, setHolderName] = useState('')

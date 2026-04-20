@@ -1,236 +1,333 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet,
-  FlatList, Alert, ActivityIndicator, Modal, ScrollView,
+  View, Text, TouchableOpacity, StyleSheet, ScrollView,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useNavigation } from '@react-navigation/native'
-import Toast from 'react-native-toast-message'
-import { ArrowLeft, UserPlus, Trash2, Send, X, Search, ChevronDown } from 'lucide-react-native'
-import api from '../api/client'
-import COUNTRIES from '../data/countries'
-import Spinner from '../components/Spinner'
+import { useNavigation, useRoute } from '@react-navigation/native'
+import {
+  ArrowLeft, ChevronDown, ChevronRight,
+  Smartphone, UserPlus, Zap, Shield,
+} from 'lucide-react-native'
 
-const DEFAULT_COUNTRY = COUNTRIES[0]
+const NAVY  = '#0A1628'
+const TEAL  = '#0E9E98'
+const TEAL_LIGHT  = '#F0FAF9'
+const TEAL_BORDER = '#C9EDE9'
+const TEAL_BG     = '#3A8C7E'
+
+const DEST_COUNTRIES = [
+  { name: 'Senegal',       flag: '🇸🇳', currency: 'XOF' },
+  { name: "Côte d'Ivoire", flag: '🇨🇮', currency: 'XOF' },
+  { name: 'Mali',          flag: '🇲🇱', currency: 'XOF' },
+  { name: 'Burkina Faso',  flag: '🇧🇫', currency: 'XOF' },
+  { name: 'Niger',         flag: '🇳🇪', currency: 'XOF' },
+  { name: 'Togo',          flag: '🇹🇬', currency: 'XOF' },
+  { name: 'Benin',         flag: '🇧🇯', currency: 'XOF' },
+  { name: 'Guinea',        flag: '🇬🇳', currency: 'GNF' },
+  { name: 'Cameroon',      flag: '🇨🇲', currency: 'XAF' },
+  { name: 'Nigeria',       flag: '🇳🇬', currency: 'NGN' },
+  { name: 'Ghana',         flag: '🇬🇭', currency: 'GHS' },
+  { name: 'Kenya',         flag: '🇰🇪', currency: 'KES' },
+  { name: 'Morocco',       flag: '🇲🇦', currency: 'MAD' },
+  { name: 'South Africa',  flag: '🇿🇦', currency: 'ZAR' },
+  { name: 'Egypt',         flag: '🇪🇬', currency: 'EGP' },
+  { name: 'Ethiopia',      flag: '🇪🇹', currency: 'ETB' },
+  { name: 'Gambia',        flag: '🇬🇲', currency: 'GMD' },
+]
+
+function Feature({ icon, text }) {
+  return (
+    <View style={s.featureChip}>
+      {icon}
+      <Text style={s.featureText}>{text}</Text>
+    </View>
+  )
+}
 
 export default function RecipientsScreen() {
   const navigation = useNavigation()
+  const route = useRoute()
   const insets = useSafeAreaInsets()
-  const [recipients, setRecipients] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [showForm, setShowForm] = useState(false)
-  const [phone, setPhone] = useState('')
-  const [fullName, setFullName] = useState('')
-  const [nickname, setNickname] = useState('')
-  const [country, setCountry] = useState(DEFAULT_COUNTRY)
-  const [showCountryModal, setShowCountryModal] = useState(false)
-  const [countrySearch, setCountrySearch] = useState('')
-  const [saving, setSaving] = useState(false)
 
-  const load = async () => {
-    try {
-      const { data } = await api.get('/user/recipients')
-      setRecipients(data.recipients || [])
-    } catch { Toast.show({ type: 'error', text1: 'Failed to load recipients' }) }
-    finally { setLoading(false) }
-  }
+  const initialCountry =
+    DEST_COUNTRIES.find(c => c.name === route.params?.country_name) ||
+    DEST_COUNTRIES[16]
 
-  useEffect(() => { load() }, [])
+  const [country, setCountry] = useState(initialCountry)
+  const [showCountryPicker, setShowCountryPicker] = useState(false)
 
-  const resetForm = () => { setPhone(''); setFullName(''); setNickname(''); setCountry(DEFAULT_COUNTRY) }
-
-  const save = async () => {
-    if (!phone || !fullName) return Toast.show({ type: 'error', text1: 'Phone and name are required' })
-    setSaving(true)
-    try {
-      let p = phone.replace(/[\s\-().]/g, '')
-      if (!p.startsWith('+')) p = country.dial + p.replace(/^0+/, '')
-      await api.post('/user/recipients', {
-        phone_number: p, full_name: fullName, nickname,
-        country_code: country.code, country_name: country.name,
-      })
-      Toast.show({ type: 'success', text1: 'Recipient saved!' })
-      resetForm()
-      setShowForm(false)
-      load()
-    } catch (err) {
-      Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Failed to save' })
-    } finally { setSaving(false) }
-  }
-
-  const remove = (id, name) => {
-    Alert.alert('Remove Recipient', `Remove ${name}?`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Remove', style: 'destructive', onPress: async () => {
-        try {
-          await api.delete(`/user/recipients/${id}`)
-          Toast.show({ type: 'success', text1: 'Removed' })
-          setRecipients(r => r.filter(x => x.id !== id))
-        } catch { Toast.show({ type: 'error', text1: 'Failed to remove' }) }
-      }},
-    ])
-  }
-
-  const filteredCountries = countrySearch.trim()
-    ? COUNTRIES.filter(c => c.name.toLowerCase().includes(countrySearch.toLowerCase()) || c.dial.includes(countrySearch))
-    : COUNTRIES
+  const toPhone = route.params?.to_phone || ''
 
   return (
-    <View style={[s.container, { paddingTop: insets.top }]}>
-      {/* Header */}
-      <View style={s.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn}>
-          <ArrowLeft size={20} color="#374151" />
-        </TouchableOpacity>
-        <Text style={s.title}>Recipients</Text>
-        <View style={{ width: 36 }} />
+    <View style={[s.screen, { paddingTop: insets.top }]}>
+
+      {/* ── Dark header band ── */}
+      <View style={s.headerBand}>
+        <View style={s.headerTop}>
+          <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+            <ArrowLeft size={20} color="#fff" />
+          </TouchableOpacity>
+
+          <View style={s.headerCenter}>
+            <Text style={s.headerSub}>TRANSFER</Text>
+            <Text style={s.headerTitle}>Receive method</Text>
+          </View>
+
+          <TouchableOpacity
+            style={s.countryPill}
+            onPress={() => setShowCountryPicker(v => !v)}
+            activeOpacity={0.85}
+          >
+            <Text style={{ fontSize: 16 }}>{country.flag}</Text>
+            <Text style={s.countryPillText}>{country.name}</Text>
+            <ChevronDown size={12} color="rgba(255,255,255,0.7)" />
+          </TouchableOpacity>
+        </View>
+
+        <Text style={s.headerQuestion}>
+          How should your recipient{'\n'}receive the money?
+        </Text>
       </View>
 
-      <FlatList
-        data={recipients}
-        keyExtractor={r => String(r.id)}
-        contentContainerStyle={s.list}
-        ListHeaderComponent={() => (
-          <View>
-            {!showForm ? (
-              <TouchableOpacity style={s.addBtn} onPress={() => setShowForm(true)}>
-                <UserPlus size={16} color="#4F46E5" />
-                <Text style={s.addBtnText}>Add New Recipient</Text>
+      {/* ── Country dropdown ── */}
+      {showCountryPicker && (
+        <View style={s.dropdown}>
+          <ScrollView style={{ maxHeight: 220 }} nestedScrollEnabled showsVerticalScrollIndicator={false}>
+            {DEST_COUNTRIES.map(c => (
+              <TouchableOpacity
+                key={c.name}
+                style={[s.dropdownOption, c.name === country.name && s.dropdownOptionActive]}
+                onPress={() => { setCountry(c); setShowCountryPicker(false) }}
+              >
+                <Text style={{ fontSize: 20 }}>{c.flag}</Text>
+                <Text style={s.dropdownName}>{c.name}</Text>
+                <Text style={s.dropdownCcy}>{c.currency}</Text>
               </TouchableOpacity>
-            ) : (
-              <View style={s.formCard}>
-                <View style={s.formHeader}>
-                  <Text style={s.formTitle}>New Recipient</Text>
-                  <TouchableOpacity onPress={() => { setShowForm(false); resetForm() }}>
-                    <X size={18} color="#9CA3AF" />
-                  </TouchableOpacity>
-                </View>
-
-                {/* Country picker */}
-                <Text style={s.label}>Country</Text>
-                <TouchableOpacity style={s.countryTrigger} onPress={() => setShowCountryModal(true)}>
-                  <Text style={{ fontSize: 18 }}>{country.flag}</Text>
-                  <Text style={s.countryName}>{country.name}</Text>
-                  <Text style={s.dialText}>{country.dial}</Text>
-                  <ChevronDown size={14} color="#9CA3AF" />
-                </TouchableOpacity>
-
-                <TextInput style={[s.input, { marginTop: 10 }]} placeholder="Phone number *" placeholderTextColor="#9CA3AF" keyboardType="phone-pad" value={phone} onChangeText={setPhone} />
-                <TextInput style={[s.input, { marginTop: 10 }]} placeholder="Full name *" placeholderTextColor="#9CA3AF" value={fullName} onChangeText={setFullName} />
-                <TextInput style={[s.input, { marginTop: 10 }]} placeholder="Nickname (optional)" placeholderTextColor="#9CA3AF" value={nickname} onChangeText={setNickname} />
-
-                <TouchableOpacity style={[s.btn, saving && s.btnDisabled]} onPress={save} disabled={saving}>
-                  {saving ? <Spinner size="sm" color="#fff" /> : <Text style={s.btnText}>Save Recipient</Text>}
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-        )}
-        ListEmptyComponent={() => !loading ? (
-          <View style={s.empty}>
-            <UserPlus size={40} color="#E5E7EB" />
-            <Text style={s.emptyText}>No saved recipients yet</Text>
-          </View>
-        ) : null}
-        renderItem={({ item: r }) => {
-          const c = COUNTRIES.find(x => x.code === r.country_code)
-          const initials = (r.full_name || r.phone_number).split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
-          return (
-            <View style={s.recipientCard}>
-              <View style={[s.avatar, { backgroundColor: r.avatar_color || '#4F46E5' }]}>
-                <Text style={s.avatarText}>{initials}</Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={s.recipientName}>{r.full_name || r.phone_number}</Text>
-                {r.nickname ? <Text style={s.recipientNickname}>{r.nickname}</Text> : null}
-                <Text style={s.recipientMeta}>{c?.flag || ''} {r.country_name} · {r.phone_number}</Text>
-              </View>
-              <TouchableOpacity style={s.actionBtn} onPress={() => navigation.navigate('SendMoney', { to_phone: r.phone_number })}>
-                <Send size={14} color="#4F46E5" />
-              </TouchableOpacity>
-              <TouchableOpacity style={[s.actionBtn, { backgroundColor: '#FEF2F2' }]} onPress={() => remove(r.id, r.full_name || r.phone_number)}>
-                <Trash2 size={14} color="#EF4444" />
-              </TouchableOpacity>
-            </View>
-          )
-        }}
-      />
-
-      {loading && (
-        <View style={s.loadingOverlay}><ActivityIndicator size="large" color="#4F46E5" /></View>
+            ))}
+          </ScrollView>
+        </View>
       )}
 
-      {/* Country modal */}
-      <Modal visible={showCountryModal} animationType="slide" transparent>
-        <View style={s.modalOverlay}>
-          <View style={s.modalSheet}>
-            <View style={s.modalHandle} />
-            <View style={s.modalSearch}>
-              <Search size={14} color="#9CA3AF" />
-              <TextInput
-                style={s.modalSearchInput}
-                placeholder="Search country…"
-                placeholderTextColor="#9CA3AF"
-                value={countrySearch}
-                onChangeText={setCountrySearch}
-                autoFocus
-              />
-            </View>
-            <FlatList
-              data={filteredCountries}
-              keyExtractor={c => c.code}
-              style={{ maxHeight: 400 }}
-              renderItem={({ item: c }) => (
-                <TouchableOpacity style={[s.modalOption, c.code === country.code && s.modalOptionActive]} onPress={() => { setCountry(c); setShowCountryModal(false); setCountrySearch('') }}>
-                  <Text style={{ fontSize: 20, width: 28 }}>{c.flag}</Text>
-                  <Text style={s.modalOptionName}>{c.name}</Text>
-                  <Text style={s.modalOptionDial}>{c.dial}</Text>
-                </TouchableOpacity>
-              )}
-            />
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={s.content}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+
+        {/* ── Method 1: Sendwave Wallet ── */}
+        <TouchableOpacity
+          style={s.methodCard}
+          onPress={() => navigation.navigate('AddRecipient', {
+            country_name: country.name,
+            to_phone:     toPhone,
+            delivery:     'wallet',
+          })}
+          activeOpacity={0.88}
+        >
+          {/* Recommended ribbon */}
+          <View style={s.recommendedRibbon}>
+            <Text style={s.recommendedText}>RECOMMENDED</Text>
           </View>
-        </View>
-      </Modal>
+
+          <View style={s.methodInner}>
+            {/* Icon */}
+            <View style={[s.methodIconWrap, { backgroundColor: TEAL_BG }]}>
+              <Text style={s.methodIconLetter}>S</Text>
+            </View>
+
+            <View style={s.methodBody}>
+              <Text style={s.methodTitle}>Sendwave Wallet</Text>
+              <Text style={s.methodDesc}>
+                Send digital dollars directly to their Sendwave Wallet. They choose when and how to cash out.
+              </Text>
+              <View style={s.featureRow}>
+                <Feature
+                  icon={<Zap size={11} color={TEAL} />}
+                  text="Instant"
+                />
+                <Feature
+                  icon={<Shield size={11} color={TEAL} />}
+                  text="USDC secured"
+                />
+              </View>
+            </View>
+          </View>
+
+          <View style={s.methodFooter}>
+            <Text style={s.methodFooterText}>Continue with Wallet</Text>
+            <ChevronRight size={16} color={TEAL} />
+          </View>
+        </TouchableOpacity>
+
+        {/* ── Method 2: Wave / Cash pickup ── */}
+        <TouchableOpacity
+          style={[s.methodCard, s.methodCardAlt]}
+          onPress={() => navigation.navigate('AddRecipient', {
+            country_name: country.name,
+            to_phone:     toPhone,
+            delivery:     'wave',
+          })}
+          activeOpacity={0.88}
+        >
+          <View style={s.methodInner}>
+            {/* Icon */}
+            <View style={[s.methodIconWrap, { backgroundColor: '#F0F0F0', borderWidth: 1, borderColor: '#E0E0E0' }]}>
+              <Smartphone size={22} color="#888" />
+            </View>
+
+            <View style={s.methodBody}>
+              <Text style={s.methodTitle}>Wave / Cash pickup</Text>
+              <Text style={s.methodDesc}>
+                Send to their Wave mobile wallet or have them collect cash at an agent location.
+              </Text>
+              <View style={s.featureRow}>
+                <Feature
+                  icon={<Text style={{ fontSize: 11 }}>📱</Text>}
+                  text="Mobile money"
+                />
+                <Feature
+                  icon={<Text style={{ fontSize: 11 }}>🏪</Text>}
+                  text="Agent pickup"
+                />
+              </View>
+            </View>
+          </View>
+
+          <View style={[s.methodFooter, { borderTopColor: '#F0F0F0' }]}>
+            <Text style={[s.methodFooterText, { color: '#555' }]}>Continue with Wave</Text>
+            <ChevronRight size={16} color="#888" />
+          </View>
+        </TouchableOpacity>
+
+        {/* ── Add new recipient ── */}
+        <TouchableOpacity
+          style={s.addRow}
+          onPress={() => navigation.navigate('AddRecipient', { country_name: country.name, to_phone: toPhone })}
+          activeOpacity={0.8}
+        >
+          <View style={s.addIconWrap}>
+            <UserPlus size={17} color={TEAL} />
+          </View>
+          <Text style={s.addText}>Add a new recipient</Text>
+          <ChevronRight size={16} color="#BBBBBB" />
+        </TouchableOpacity>
+
+      </ScrollView>
     </View>
   )
 }
 
 const s = StyleSheet.create({
-  container:    { flex: 1, backgroundColor: '#F9FAFB' },
-  header:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 12 },
-  backBtn:      { width: 36, height: 36, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
-  title:        { fontSize: 18, fontWeight: '700', color: '#111827' },
-  list:         { padding: 20, gap: 10 },
-  addBtn:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 16, borderWidth: 2, borderColor: '#C7D2FE', borderStyle: 'dashed', marginBottom: 10 },
-  addBtnText:   { fontSize: 14, fontWeight: '600', color: '#4F46E5' },
-  formCard:     { backgroundColor: '#fff', borderRadius: 20, padding: 16, marginBottom: 10 },
-  formHeader:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  formTitle:    { fontSize: 16, fontWeight: '700', color: '#111827' },
-  label:        { fontSize: 13, fontWeight: '500', color: '#6B7280', marginBottom: 6 },
-  countryTrigger:{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F9FAFB', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12 },
-  countryName:  { flex: 1, fontSize: 14, fontWeight: '500', color: '#111827' },
-  dialText:     { fontSize: 12, color: '#9CA3AF' },
-  input:        { backgroundColor: '#F9FAFB', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, fontSize: 14, color: '#111827' },
-  btn:          { backgroundColor: '#4F46E5', borderRadius: 14, paddingVertical: 13, alignItems: 'center', marginTop: 14 },
-  btnDisabled:  { opacity: 0.7 },
-  btnText:      { color: '#fff', fontSize: 15, fontWeight: '700' },
-  recipientCard:{ flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderRadius: 16, padding: 14 },
-  avatar:       { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  avatarText:   { fontSize: 14, fontWeight: '700', color: '#fff' },
-  recipientName:{ fontSize: 14, fontWeight: '700', color: '#111827' },
-  recipientNickname:{ fontSize: 12, color: '#6366F1' },
-  recipientMeta:{ fontSize: 12, color: '#9CA3AF', marginTop: 2 },
-  actionBtn:    { width: 32, height: 32, borderRadius: 10, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
-  empty:        { alignItems: 'center', paddingVertical: 40, gap: 10 },
-  emptyText:    { fontSize: 14, color: '#9CA3AF' },
-  loadingOverlay:{ position: 'absolute', inset: 0, justifyContent: 'center', alignItems: 'center' },
-  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
-  modalSheet:   { backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 12, paddingBottom: 32 },
-  modalHandle:  { width: 36, height: 4, backgroundColor: '#E5E7EB', borderRadius: 2, alignSelf: 'center', marginBottom: 12 },
-  modalSearch:  { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginBottom: 8, backgroundColor: '#F3F4F6', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8 },
-  modalSearchInput:{ flex: 1, fontSize: 14, color: '#374151' },
-  modalOption:  { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 12 },
-  modalOptionActive:{ backgroundColor: '#EEF2FF' },
-  modalOptionName:{ flex: 1, fontSize: 14, color: '#111827', fontWeight: '500' },
-  modalOptionDial:{ fontSize: 12, color: '#9CA3AF' },
+  screen: { flex: 1, backgroundColor: '#F4F6F9' },
+
+  // ── Header ──────────────────────────────────────────────────────────────────
+  headerBand: {
+    backgroundColor: NAVY,
+    paddingHorizontal: 20,
+    paddingBottom: 28,
+  },
+  headerTop: {
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 22,
+    paddingTop: 12,
+  },
+  backBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  headerCenter: { flex: 1, alignItems: 'center' },
+  headerSub:    { fontSize: 10, fontWeight: '700', color: 'rgba(255,255,255,0.45)', letterSpacing: 2, marginBottom: 2 },
+  headerTitle:  { fontSize: 17, fontWeight: '800', color: '#fff' },
+
+  countryPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 20, paddingHorizontal: 11, paddingVertical: 7,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
+  },
+  countryPillText: { fontSize: 12, fontWeight: '600', color: '#fff' },
+
+  headerQuestion: {
+    fontSize: 22, fontWeight: '800', color: '#fff', lineHeight: 30,
+  },
+
+  // ── Country dropdown ──────────────────────────────────────────────────────
+  dropdown: {
+    backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#E5E7EB',
+    marginHorizontal: 16, marginTop: 8, overflow: 'hidden', zIndex: 99,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.12, shadowRadius: 14, elevation: 8,
+  },
+  dropdownOption:       { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  dropdownOptionActive: { backgroundColor: '#F0FAF9' },
+  dropdownName: { flex: 1, fontSize: 14, fontWeight: '600', color: '#111' },
+  dropdownCcy:  { fontSize: 12, color: '#9CA3AF', fontWeight: '500' },
+
+  // ── Content ────────────────────────────────────────────────────────────────
+  content: { padding: 16, gap: 12 },
+
+  // ── Method cards ──────────────────────────────────────────────────────────
+  methodCard: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    overflow: 'hidden',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.07, shadowRadius: 12, elevation: 5,
+    borderWidth: 1.5, borderColor: TEAL_BORDER,
+  },
+  methodCardAlt: {
+    borderColor: '#E5E7EB',
+  },
+  recommendedRibbon: {
+    backgroundColor: TEAL,
+    paddingHorizontal: 14, paddingVertical: 7,
+    alignItems: 'center',
+  },
+  recommendedText: { fontSize: 11, fontWeight: '800', color: '#fff', letterSpacing: 1.2 },
+
+  methodInner: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 16,
+    padding: 20,
+  },
+  methodIconWrap: {
+    width: 52, height: 52, borderRadius: 16,
+    alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0,
+  },
+  methodIconLetter: { fontSize: 24, fontWeight: '900', color: '#fff' },
+  methodBody:  { flex: 1 },
+  methodTitle: { fontSize: 17, fontWeight: '800', color: '#111', marginBottom: 6 },
+  methodDesc:  { fontSize: 13, color: '#6B7280', lineHeight: 20, marginBottom: 12 },
+
+  featureRow:  { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  featureChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: TEAL_LIGHT,
+    borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5,
+    borderWidth: 1, borderColor: TEAL_BORDER,
+  },
+  featureText: { fontSize: 11, fontWeight: '600', color: TEAL },
+
+  methodFooter: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingVertical: 14,
+    borderTopWidth: 1, borderTopColor: TEAL_BORDER,
+  },
+  methodFooterText: { fontSize: 14, fontWeight: '700', color: TEAL },
+
+  // ── Add recipient row ──────────────────────────────────────────────────────
+  addRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: '#fff',
+    borderRadius: 16, paddingHorizontal: 18, paddingVertical: 16,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
+  },
+  addIconWrap: {
+    width: 36, height: 36, borderRadius: 12,
+    backgroundColor: TEAL_LIGHT,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: TEAL_BORDER,
+  },
+  addText: { flex: 1, fontSize: 15, fontWeight: '700', color: TEAL },
 })

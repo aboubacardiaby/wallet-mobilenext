@@ -25,6 +25,7 @@ import RequestMoneyScreen from '../screens/RequestMoneyScreen'
 import CashScreen         from '../screens/CashScreen'
 import QRScreen           from '../screens/QRScreen'
 import RecipientsScreen   from '../screens/RecipientsScreen'
+import AddRecipientScreen from '../screens/AddRecipientScreen'
 import KYCScreen          from '../screens/KYCScreen'
 import PaymentMethodsScreen from '../screens/PaymentMethodsScreen'
 import DeviceManagerScreen  from '../screens/DeviceManagerScreen'
@@ -95,6 +96,7 @@ export default function RootNavigator() {
             <Stack.Screen name="CashOut"        component={CashScreen} initialParams={{ type: 'out' }} />
             <Stack.Screen name="QR"             component={QRScreen} />
             <Stack.Screen name="Recipients"     component={RecipientsScreen} />
+            <Stack.Screen name="AddRecipient"   component={AddRecipientScreen} />
             <Stack.Screen name="KYC"            component={KYCScreen} />
             <Stack.Screen name="PaymentMethods" component={PaymentMethodsScreen} />
             <Stack.Screen name="DeviceManager"  component={DeviceManagerScreen} />
