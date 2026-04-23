@@ -100,6 +100,7 @@ export default function SendMoneyScreen() {
 
   const [wallet, setWallet]                 = useState(null)
   const [toPhone, setToPhone]               = useState(route.params?.to_phone || '')
+  const [delivery, setDelivery]             = useState(route.params?.delivery || 'wallet')
   const [description, setDescription]       = useState('')
   const [amount, setAmount]                 = useState('')
   const [destCountry, setDestCountry]       = useState(DEST_COUNTRIES[16])
@@ -132,11 +133,12 @@ export default function SendMoneyScreen() {
   // Sync params whenever the screen is (re-)focused with new recipient data
   useEffect(() => {
     if (route.params?.to_phone) setToPhone(route.params.to_phone)
+    if (route.params?.delivery) setDelivery(route.params.delivery)
     if (route.params?.country_name) {
       const match = DEST_COUNTRIES.find(c => c.name === route.params.country_name)
       if (match) setDestCountry(match)
     }
-  }, [route.params?.to_phone, route.params?.country_name])
+  }, [route.params?.to_phone, route.params?.country_name, route.params?.delivery])
 
   useEffect(() => {
     if (!senderCcy || !destCcy) return
@@ -197,20 +199,71 @@ export default function SendMoneyScreen() {
     }
   }
 
-  // "Confirm transfer" — execute after user reviews the sheet
+  // "Confirm transfer" — routes to the correct backend endpoint per delivery method
   const confirmTransfer = async () => {
     setConfirming(true)
     try {
-      const { data } = await api.post('/transfer/send', {
-        to_phone: toPhone, amount: sendAmt, description,
-      })
+      let responseData
+
+      if (delivery === 'wave') {
+        // Wave mobile money — dedicated endpoint
+        const { data } = await api.post('/transfer/wave', {
+          to_phone:     toPhone,
+          amount:       sendAmt,
+          recv_currency: destCcy,
+          description,
+        })
+        responseData = data
+
+      } else if (delivery === 'cash') {
+        // Cash pickup — need an agent in the destination country
+        const agentsRes = await api.get(
+          `/transfer/agents?country=${encodeURIComponent(destCountry.name)}`
+        )
+        const agents = agentsRes.data?.agents || []
+        if (!agents.length) {
+          throw new Error(`No cash pickup agents available in ${destCountry.name}`)
+        }
+        const { data } = await api.post('/transfer/cash-pickup', {
+          to_phone:       toPhone,
+          recipient_name: quote?.recipient_name || toPhone,
+          amount:         sendAmt,
+          recv_currency:  destCcy,
+          agent_id:       agents[0].id,
+          description,
+        })
+        responseData = data
+
+      } else {
+        // Wallet-to-wallet (default)
+        const { data } = await api.post('/transfer/send', {
+          to_phone: toPhone,
+          amount:   sendAmt,
+          description,
+        })
+        responseData = data
+      }
+
+      // Inject recipient_name (backends don't return it for wave/wallet)
+      const enriched = {
+        ...responseData,
+        recipient_name: responseData.recipient_name || quote?.recipient_name || toPhone,
+      }
+
       setShowConfirm(false)
-      notifySender(data)
-      notifyRecipient(data, toPhone)
-      setResult(data)
+      notifySender(enriched)
+      notifyRecipient(enriched, toPhone)
+      setResult(enriched)
       Toast.show({ type: 'success', text1: 'Transfer sent!' })
     } catch (err) {
-      Toast.show({ type: 'error', text1: err.response?.data?.detail || err.message || 'Transfer failed' })
+      const msg =
+        err.response?.data?.detail ||
+        err.response?.data?.message ||
+        err.response?.data?.error ||
+        (typeof err.response?.data === 'string' ? err.response.data : null) ||
+        err.message ||
+        'Transfer failed'
+      Toast.show({ type: 'error', text1: String(msg) })
     } finally {
       setConfirming(false)
     }
