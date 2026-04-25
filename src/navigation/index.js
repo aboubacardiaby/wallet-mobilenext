@@ -29,6 +29,7 @@ import AddRecipientScreen from '../screens/AddRecipientScreen'
 import KYCScreen          from '../screens/KYCScreen'
 import PaymentMethodsScreen from '../screens/PaymentMethodsScreen'
 import DeviceManagerScreen  from '../screens/DeviceManagerScreen'
+import SmtpSettingsScreen   from '../screens/SmtpSettingsScreen'
 
 const Stack = createNativeStackNavigator()
 const Tab   = createBottomTabNavigator()
@@ -100,6 +101,7 @@ export default function RootNavigator() {
             <Stack.Screen name="KYC"            component={KYCScreen} />
             <Stack.Screen name="PaymentMethods" component={PaymentMethodsScreen} />
             <Stack.Screen name="DeviceManager"  component={DeviceManagerScreen} />
+            <Stack.Screen name="SmtpSettings"   component={SmtpSettingsScreen} />
           </>
         )}
       </Stack.Navigator>

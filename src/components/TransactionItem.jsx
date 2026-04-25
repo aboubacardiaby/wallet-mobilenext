@@ -1,5 +1,5 @@
-import { View, Text, StyleSheet } from 'react-native'
-import { ArrowUpRight, ArrowDownLeft, Banknote, ArrowDownToLine } from 'lucide-react-native'
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
+import { ArrowUpRight, ArrowDownLeft, Banknote, ArrowDownToLine, ChevronRight } from 'lucide-react-native'
 
 const TYPE_CONFIG = {
   send:     { icon: ArrowUpRight,    color: '#EF4444', bg: '#FEF2F2', sign: '-', label: 'Sent' },
@@ -8,7 +8,7 @@ const TYPE_CONFIG = {
   cash_out: { icon: Banknote,        color: '#F97316', bg: '#FFF7ED', sign: '-', label: 'Cash Out' },
 }
 
-export default function TransactionItem({ tx, userId }) {
+export default function TransactionItem({ tx, userId, onPress }) {
   const isDebit = tx.from_user_id === userId || tx.type === 'send' || tx.type === 'cash_out'
   const cfg = TYPE_CONFIG[tx.type] ?? TYPE_CONFIG.receive
   const Icon = cfg.icon
@@ -20,7 +20,7 @@ export default function TransactionItem({ tx, userId }) {
   })
 
   return (
-    <View style={s.row}>
+    <TouchableOpacity style={s.row} onPress={onPress} activeOpacity={onPress ? 0.7 : 1}>
       <View style={[s.iconBox, { backgroundColor: cfg.bg }]}>
         <Icon size={18} color={cfg.color} />
       </View>
@@ -39,7 +39,8 @@ export default function TransactionItem({ tx, userId }) {
           </Text>
         </View>
       </View>
-    </View>
+      {onPress && <ChevronRight size={14} color="#D1D5DB" style={{ marginLeft: 4 }} />}
+    </TouchableOpacity>
   )
 }
 

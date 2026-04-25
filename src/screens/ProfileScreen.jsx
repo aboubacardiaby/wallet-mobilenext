@@ -9,7 +9,7 @@ import Toast from 'react-native-toast-message'
 import {
   User, LogOut, Shield, Phone, Mail, Users,
   ShieldCheck, ShieldX, Clock, ChevronRight,
-  CreditCard, Smartphone, Pencil, Check, X,
+  CreditCard, Smartphone, Pencil, Check, X, Server,
 } from 'lucide-react-native'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
@@ -255,6 +255,13 @@ export default function ProfileScreen() {
                 title="Device Manager"
                 sub="Trusted devices"
                 onPress={() => navigation.navigate('DeviceManager')}
+              />
+              <View style={s.menuDivider} />
+              <MenuRow
+                icon={Server} iconBg="#F0FAF9" iconColor="#0E9E98"
+                title="Email (SMTP)"
+                sub="Configure outgoing mail server"
+                onPress={() => navigation.navigate('SmtpSettings')}
               />
             </View>
           </View>
