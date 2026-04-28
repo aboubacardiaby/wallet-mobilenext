@@ -1,333 +1,378 @@
-import { useState } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
-  View, Text, TouchableOpacity, StyleSheet, ScrollView,
+  View, Text, TextInput, TouchableOpacity, StyleSheet,
+  FlatList, ActivityIndicator, Modal,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useNavigation, useRoute } from '@react-navigation/native'
-import {
-  ArrowLeft, ChevronDown, ChevronRight,
-  Smartphone, UserPlus, Zap, Shield,
-} from 'lucide-react-native'
+import { useNavigation } from '@react-navigation/native'
+import { ArrowLeft, Search, UserPlus, ChevronRight, Pencil, Wallet, Smartphone, Building2 } from 'lucide-react-native'
+import api from '../api/client'
 
-const NAVY  = '#0A1628'
-const TEAL  = '#0E9E98'
-const TEAL_LIGHT  = '#F0FAF9'
-const TEAL_BORDER = '#C9EDE9'
-const TEAL_BG     = '#3A8C7E'
+const TEAL       = '#0E9E98'
+const TEAL_LIGHT = '#E6F7F7'
+const NAVY       = '#0A1628'
 
-const DEST_COUNTRIES = [
-  { name: 'Senegal',       flag: '🇸🇳', currency: 'XOF' },
-  { name: "Côte d'Ivoire", flag: '🇨🇮', currency: 'XOF' },
-  { name: 'Mali',          flag: '🇲🇱', currency: 'XOF' },
-  { name: 'Burkina Faso',  flag: '🇧🇫', currency: 'XOF' },
-  { name: 'Niger',         flag: '🇳🇪', currency: 'XOF' },
-  { name: 'Togo',          flag: '🇹🇬', currency: 'XOF' },
-  { name: 'Benin',         flag: '🇧🇯', currency: 'XOF' },
-  { name: 'Guinea',        flag: '🇬🇳', currency: 'GNF' },
-  { name: 'Cameroon',      flag: '🇨🇲', currency: 'XAF' },
-  { name: 'Nigeria',       flag: '🇳🇬', currency: 'NGN' },
-  { name: 'Ghana',         flag: '🇬🇭', currency: 'GHS' },
-  { name: 'Kenya',         flag: '🇰🇪', currency: 'KES' },
-  { name: 'Morocco',       flag: '🇲🇦', currency: 'MAD' },
-  { name: 'South Africa',  flag: '🇿🇦', currency: 'ZAR' },
-  { name: 'Egypt',         flag: '🇪🇬', currency: 'EGP' },
-  { name: 'Ethiopia',      flag: '🇪🇹', currency: 'ETB' },
-  { name: 'Gambia',        flag: '🇬🇲', currency: 'GMD' },
+const DELIVERY_OPTIONS = [
+  {
+    id:    'wallet',
+    label: 'Wallet Transfer',
+    sub:   'Direct to mobile wallet',
+    icon:  (color) => <Wallet size={22} color={color} />,
+    color: TEAL,
+    bg:    TEAL_LIGHT,
+  },
+  {
+    id:    'wave',
+    label: 'Wave Mobile Money',
+    sub:   'Local currency wallet',
+    icon:  (color) => <Smartphone size={22} color={color} />,
+    color: '#1BAEC2',
+    bg:    '#E6F7FA',
+  },
+  {
+    id:    'cash',
+    label: 'Cash Pickup',
+    sub:   'Agent collection point',
+    icon:  (color) => <Building2 size={22} color={color} />,
+    color: '#F59E0B',
+    bg:    '#FEF9C3',
+  },
 ]
 
-function Feature({ icon, text }) {
-  return (
-    <View style={s.featureChip}>
-      {icon}
-      <Text style={s.featureText}>{text}</Text>
-    </View>
-  )
+const DIAL_MAP = [
+  { dial: '+221', flag: '🇸🇳', currency: 'XOF', name: 'Senegal' },
+  { dial: '+225', flag: '🇨🇮', currency: 'XOF', name: "Côte d'Ivoire" },
+  { dial: '+223', flag: '🇲🇱', currency: 'XOF', name: 'Mali' },
+  { dial: '+226', flag: '🇧🇫', currency: 'XOF', name: 'Burkina Faso' },
+  { dial: '+227', flag: '🇳🇪', currency: 'XOF', name: 'Niger' },
+  { dial: '+228', flag: '🇹🇬', currency: 'XOF', name: 'Togo' },
+  { dial: '+229', flag: '🇧🇯', currency: 'XOF', name: 'Benin' },
+  { dial: '+224', flag: '🇬🇳', currency: 'GNF', name: 'Guinea' },
+  { dial: '+237', flag: '🇨🇲', currency: 'XAF', name: 'Cameroon' },
+  { dial: '+234', flag: '🇳🇬', currency: 'NGN', name: 'Nigeria' },
+  { dial: '+233', flag: '🇬🇭', currency: 'GHS', name: 'Ghana' },
+  { dial: '+254', flag: '🇰🇪', currency: 'KES', name: 'Kenya' },
+  { dial: '+212', flag: '🇲🇦', currency: 'MAD', name: 'Morocco' },
+  { dial: '+27',  flag: '🇿🇦', currency: 'ZAR', name: 'South Africa' },
+  { dial: '+20',  flag: '🇪🇬', currency: 'EGP', name: 'Egypt' },
+  { dial: '+251', flag: '🇪🇹', currency: 'ETB', name: 'Ethiopia' },
+  { dial: '+220', flag: '🇬🇲', currency: 'GMD', name: 'Gambia' },
+].sort((a, b) => b.dial.length - a.dial.length)
+
+function detectCountry(phone) {
+  const n = (phone || '').replace(/[\s\-()]/g, '')
+  return DIAL_MAP.find(c => n.startsWith(c.dial)) || { flag: '🌍', currency: '', name: '' }
+}
+
+function deliveryLabel(type) {
+  if (type === 'wave_transfer') return 'Wave Mobile Money'
+  if (type === 'cash_pickup')   return 'Cash Pickup'
+  return 'Wallet Transfer'
+}
+
+function extractRecipients(transactions) {
+  const seen = new Map()
+  for (const tx of transactions) {
+    const phone = tx.to_phone
+    if (!phone) continue
+    if (tx.type === 'top_up' || tx.type === 'receive') continue
+    if (!seen.has(phone)) {
+      const d = tx.extra_data || {}
+      seen.set(phone, {
+        phone,
+        name:     d.recipient_name || tx.to_phone,
+        currency: d.recv_currency  || '',
+        type:     tx.type,
+      })
+    }
+  }
+  return Array.from(seen.values())
 }
 
 export default function RecipientsScreen() {
   const navigation = useNavigation()
-  const route = useRoute()
-  const insets = useSafeAreaInsets()
+  const insets     = useSafeAreaInsets()
 
-  const initialCountry =
-    DEST_COUNTRIES.find(c => c.name === route.params?.country_name) ||
-    DEST_COUNTRIES[16]
+  const [query, setQuery]               = useState('')
+  const [recipients, setRecipients]     = useState([])
+  const [loading, setLoading]           = useState(true)
+  const [pickedRecipient, setPickedRecipient] = useState(null)
 
-  const [country, setCountry] = useState(initialCountry)
-  const [showCountryPicker, setShowCountryPicker] = useState(false)
+  useEffect(() => {
+    api.get('/wallet/transactions?page=1&limit=100')
+      .then(({ data }) => setRecipients(extractRecipients(data.transactions || [])))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
 
-  const toPhone = route.params?.to_phone || ''
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return recipients
+    return recipients.filter(r =>
+      r.name.toLowerCase().includes(q) || r.phone.includes(q)
+    )
+  }, [query, recipients])
+
+  const confirmDelivery = (deliveryId) => {
+    const r = pickedRecipient
+    setPickedRecipient(null)
+    const country = detectCountry(r.phone)
+    navigation.navigate('SendMoney', {
+      to_phone:     r.phone,
+      country_name: country.name,
+      delivery:     deliveryId,
+    })
+  }
+
+  const renderRecipient = ({ item: r }) => {
+    const country = detectCountry(r.phone)
+    const flag    = country.flag
+    const ccy     = r.currency || country.currency
+    const label   = deliveryLabel(r.type)
+    const hasName = r.name && r.name !== r.phone
+
+    return (
+      <TouchableOpacity style={s.row} onPress={() => setPickedRecipient(r)} activeOpacity={0.75}>
+        <Text style={s.flag}>{flag}</Text>
+        <View style={s.rowBody}>
+          <View style={s.nameRow}>
+            <Text style={s.name} numberOfLines={1}>
+              {hasName ? r.name : r.phone}
+            </Text>
+            {ccy ? <View style={s.ccyBadge}><Text style={s.ccyText}>{ccy}</Text></View> : null}
+          </View>
+          {hasName && (
+            <Text style={s.phone} numberOfLines={1}>{r.phone}</Text>
+          )}
+          <Text style={s.sub}>{label}</Text>
+        </View>
+        <Pencil size={16} color="#D1D5DB" style={{ marginLeft: 8 }} />
+      </TouchableOpacity>
+    )
+  }
+
+  // ── Delivery picker for the chosen recipient ──────────────────────────────
+  const pc = pickedRecipient
+  const pcCountry = pc ? detectCountry(pc.phone) : null
+  const pcHasName = pc && pc.name && pc.name !== pc.phone
 
   return (
     <View style={[s.screen, { paddingTop: insets.top }]}>
 
-      {/* ── Dark header band ── */}
-      <View style={s.headerBand}>
-        <View style={s.headerTop}>
-          <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
-            <ArrowLeft size={20} color="#fff" />
-          </TouchableOpacity>
-
-          <View style={s.headerCenter}>
-            <Text style={s.headerSub}>TRANSFER</Text>
-            <Text style={s.headerTitle}>Receive method</Text>
-          </View>
-
-          <TouchableOpacity
-            style={s.countryPill}
-            onPress={() => setShowCountryPicker(v => !v)}
-            activeOpacity={0.85}
-          >
-            <Text style={{ fontSize: 16 }}>{country.flag}</Text>
-            <Text style={s.countryPillText}>{country.name}</Text>
-            <ChevronDown size={12} color="rgba(255,255,255,0.7)" />
-          </TouchableOpacity>
-        </View>
-
-        <Text style={s.headerQuestion}>
-          How should your recipient{'\n'}receive the money?
-        </Text>
+      {/* ── Header ── */}
+      <View style={s.header}>
+        <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+          <ArrowLeft size={22} color={NAVY} />
+        </TouchableOpacity>
+        <Text style={s.headerTitle}>Recipients</Text>
+        <View style={{ width: 40 }} />
       </View>
 
-      {/* ── Country dropdown ── */}
-      {showCountryPicker && (
-        <View style={s.dropdown}>
-          <ScrollView style={{ maxHeight: 220 }} nestedScrollEnabled showsVerticalScrollIndicator={false}>
-            {DEST_COUNTRIES.map(c => (
-              <TouchableOpacity
-                key={c.name}
-                style={[s.dropdownOption, c.name === country.name && s.dropdownOptionActive]}
-                onPress={() => { setCountry(c); setShowCountryPicker(false) }}
-              >
-                <Text style={{ fontSize: 20 }}>{c.flag}</Text>
-                <Text style={s.dropdownName}>{c.name}</Text>
-                <Text style={s.dropdownCcy}>{c.currency}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+      {/* ── Search bar ── */}
+      <View style={s.searchWrap}>
+        <Search size={18} color="#9CA3AF" style={{ marginRight: 10 }} />
+        <TextInput
+          style={s.searchInput}
+          placeholder="Enter name to search"
+          placeholderTextColor="#9CA3AF"
+          value={query}
+          onChangeText={setQuery}
+          autoCorrect={false}
+          clearButtonMode="while-editing"
+        />
+      </View>
+
+      {/* ── Add new recipient ── */}
+      <TouchableOpacity
+        style={s.addRow}
+        onPress={() => navigation.navigate('AddRecipient', {})}
+        activeOpacity={0.8}
+      >
+        <View style={s.addIcon}>
+          <UserPlus size={20} color={TEAL} />
         </View>
+        <Text style={s.addText}>Add a new recipient</Text>
+        <ChevronRight size={18} color={TEAL} />
+      </TouchableOpacity>
+
+      {/* ── Recipient list ── */}
+      {loading ? (
+        <ActivityIndicator color={TEAL} style={{ marginTop: 40 }} />
+      ) : (
+        <FlatList
+          data={filtered}
+          keyExtractor={r => r.phone}
+          renderItem={renderRecipient}
+          ListHeaderComponent={
+            filtered.length > 0
+              ? <Text style={s.sectionLabel}>YOUR RECIPIENTS</Text>
+              : null
+          }
+          ListEmptyComponent={
+            <View style={s.emptyWrap}>
+              <Text style={s.emptyIcon}>👥</Text>
+              <Text style={s.emptyTitle}>No recipients yet</Text>
+              <Text style={s.emptySub}>
+                {query
+                  ? 'No match found. Try a different name or number.'
+                  : 'Recipients from your past transfers will appear here.'}
+              </Text>
+            </View>
+          }
+          contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        />
       )}
 
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={s.content}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
+      {/* ── Delivery method picker modal ── */}
+      <Modal
+        visible={!!pickedRecipient}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setPickedRecipient(null)}
       >
+        <View style={m.overlay}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setPickedRecipient(null)} />
+          <View style={[m.sheet, { paddingBottom: insets.bottom + 20 }]}>
 
-        {/* ── Method 1: Sendwave Wallet ── */}
-        <TouchableOpacity
-          style={s.methodCard}
-          onPress={() => navigation.navigate('AddRecipient', {
-            country_name: country.name,
-            to_phone:     toPhone,
-            delivery:     'wallet',
-          })}
-          activeOpacity={0.88}
-        >
-          {/* Recommended ribbon */}
-          <View style={s.recommendedRibbon}>
-            <Text style={s.recommendedText}>RECOMMENDED</Text>
-          </View>
+            {/* Handle */}
+            <View style={m.handle} />
 
-          <View style={s.methodInner}>
-            {/* Icon */}
-            <View style={[s.methodIconWrap, { backgroundColor: TEAL_BG }]}>
-              <Text style={s.methodIconLetter}>S</Text>
-            </View>
-
-            <View style={s.methodBody}>
-              <Text style={s.methodTitle}>Sendwave Wallet</Text>
-              <Text style={s.methodDesc}>
-                Send digital dollars directly to their Sendwave Wallet. They choose when and how to cash out.
-              </Text>
-              <View style={s.featureRow}>
-                <Feature
-                  icon={<Zap size={11} color={TEAL} />}
-                  text="Instant"
-                />
-                <Feature
-                  icon={<Shield size={11} color={TEAL} />}
-                  text="USDC secured"
-                />
+            {/* Recipient summary */}
+            {pc && (
+              <View style={m.recipientBanner}>
+                <Text style={m.bannerFlag}>{pcCountry?.flag || '🌍'}</Text>
+                <View>
+                  <Text style={m.bannerName}>{pcHasName ? pc.name : pc.phone}</Text>
+                  {pcHasName && <Text style={m.bannerPhone}>{pc.phone}</Text>}
+                </View>
               </View>
-            </View>
+            )}
+
+            <Text style={m.question}>How should they receive the money?</Text>
+
+            {DELIVERY_OPTIONS.map(opt => (
+              <TouchableOpacity
+                key={opt.id}
+                style={m.optionRow}
+                onPress={() => confirmDelivery(opt.id)}
+                activeOpacity={0.8}
+              >
+                <View style={[m.optionIcon, { backgroundColor: opt.bg }]}>
+                  {opt.icon(opt.color)}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={m.optionLabel}>{opt.label}</Text>
+                  <Text style={m.optionSub}>{opt.sub}</Text>
+                </View>
+                <ChevronRight size={18} color="#D1D5DB" />
+              </TouchableOpacity>
+            ))}
+
           </View>
+        </View>
+      </Modal>
 
-          <View style={s.methodFooter}>
-            <Text style={s.methodFooterText}>Continue with Wallet</Text>
-            <ChevronRight size={16} color={TEAL} />
-          </View>
-        </TouchableOpacity>
-
-        {/* ── Method 2: Wave / Cash pickup ── */}
-        <TouchableOpacity
-          style={[s.methodCard, s.methodCardAlt]}
-          onPress={() => navigation.navigate('AddRecipient', {
-            country_name: country.name,
-            to_phone:     toPhone,
-            delivery:     'wave',
-          })}
-          activeOpacity={0.88}
-        >
-          <View style={s.methodInner}>
-            {/* Icon */}
-            <View style={[s.methodIconWrap, { backgroundColor: '#F0F0F0', borderWidth: 1, borderColor: '#E0E0E0' }]}>
-              <Smartphone size={22} color="#888" />
-            </View>
-
-            <View style={s.methodBody}>
-              <Text style={s.methodTitle}>Wave / Cash pickup</Text>
-              <Text style={s.methodDesc}>
-                Send to their Wave mobile wallet or have them collect cash at an agent location.
-              </Text>
-              <View style={s.featureRow}>
-                <Feature
-                  icon={<Text style={{ fontSize: 11 }}>📱</Text>}
-                  text="Mobile money"
-                />
-                <Feature
-                  icon={<Text style={{ fontSize: 11 }}>🏪</Text>}
-                  text="Agent pickup"
-                />
-              </View>
-            </View>
-          </View>
-
-          <View style={[s.methodFooter, { borderTopColor: '#F0F0F0' }]}>
-            <Text style={[s.methodFooterText, { color: '#555' }]}>Continue with Wave</Text>
-            <ChevronRight size={16} color="#888" />
-          </View>
-        </TouchableOpacity>
-
-        {/* ── Add new recipient ── */}
-        <TouchableOpacity
-          style={s.addRow}
-          onPress={() => navigation.navigate('AddRecipient', { country_name: country.name, to_phone: toPhone })}
-          activeOpacity={0.8}
-        >
-          <View style={s.addIconWrap}>
-            <UserPlus size={17} color={TEAL} />
-          </View>
-          <Text style={s.addText}>Add a new recipient</Text>
-          <ChevronRight size={16} color="#BBBBBB" />
-        </TouchableOpacity>
-
-      </ScrollView>
     </View>
   )
 }
 
 const s = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#F4F6F9' },
+  screen: { flex: 1, backgroundColor: '#fff' },
 
-  // ── Header ──────────────────────────────────────────────────────────────────
-  headerBand: {
-    backgroundColor: NAVY,
-    paddingHorizontal: 20,
-    paddingBottom: 28,
-  },
-  headerTop: {
-    flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 22,
-    paddingTop: 12,
-  },
-  backBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  headerCenter: { flex: 1, alignItems: 'center' },
-  headerSub:    { fontSize: 10, fontWeight: '700', color: 'rgba(255,255,255,0.45)', letterSpacing: 2, marginBottom: 2 },
-  headerTitle:  { fontSize: 17, fontWeight: '800', color: '#fff' },
-
-  countryPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderRadius: 20, paddingHorizontal: 11, paddingVertical: 7,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
-  },
-  countryPillText: { fontSize: 12, fontWeight: '600', color: '#fff' },
-
-  headerQuestion: {
-    fontSize: 22, fontWeight: '800', color: '#fff', lineHeight: 30,
-  },
-
-  // ── Country dropdown ──────────────────────────────────────────────────────
-  dropdown: {
-    backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#E5E7EB',
-    marginHorizontal: 16, marginTop: 8, overflow: 'hidden', zIndex: 99,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.12, shadowRadius: 14, elevation: 8,
-  },
-  dropdownOption:       { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
-  dropdownOptionActive: { backgroundColor: '#F0FAF9' },
-  dropdownName: { flex: 1, fontSize: 14, fontWeight: '600', color: '#111' },
-  dropdownCcy:  { fontSize: 12, color: '#9CA3AF', fontWeight: '500' },
-
-  // ── Content ────────────────────────────────────────────────────────────────
-  content: { padding: 16, gap: 12 },
-
-  // ── Method cards ──────────────────────────────────────────────────────────
-  methodCard: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    overflow: 'hidden',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.07, shadowRadius: 12, elevation: 5,
-    borderWidth: 1.5, borderColor: TEAL_BORDER,
-  },
-  methodCardAlt: {
-    borderColor: '#E5E7EB',
-  },
-  recommendedRibbon: {
-    backgroundColor: TEAL,
-    paddingHorizontal: 14, paddingVertical: 7,
-    alignItems: 'center',
-  },
-  recommendedText: { fontSize: 11, fontWeight: '800', color: '#fff', letterSpacing: 1.2 },
-
-  methodInner: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 16,
-    padding: 20,
-  },
-  methodIconWrap: {
-    width: 52, height: 52, borderRadius: 16,
-    alignItems: 'center', justifyContent: 'center',
-    flexShrink: 0,
-  },
-  methodIconLetter: { fontSize: 24, fontWeight: '900', color: '#fff' },
-  methodBody:  { flex: 1 },
-  methodTitle: { fontSize: 17, fontWeight: '800', color: '#111', marginBottom: 6 },
-  methodDesc:  { fontSize: 13, color: '#6B7280', lineHeight: 20, marginBottom: 12 },
-
-  featureRow:  { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  featureChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: TEAL_LIGHT,
-    borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5,
-    borderWidth: 1, borderColor: TEAL_BORDER,
-  },
-  featureText: { fontSize: 11, fontWeight: '600', color: TEAL },
-
-  methodFooter: {
+  header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 20, paddingVertical: 14,
-    borderTopWidth: 1, borderTopColor: TEAL_BORDER,
+    paddingHorizontal: 16, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: '#F3F4F6',
   },
-  methodFooterText: { fontSize: 14, fontWeight: '700', color: TEAL },
+  backBtn:     { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 18, fontWeight: '800', color: NAVY },
 
-  // ── Add recipient row ──────────────────────────────────────────────────────
-  addRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 14,
-    backgroundColor: '#fff',
-    borderRadius: 16, paddingHorizontal: 18, paddingVertical: 16,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
+  searchWrap: {
+    flexDirection: 'row', alignItems: 'center',
+    marginHorizontal: 16, marginVertical: 12,
+    paddingHorizontal: 14, paddingVertical: 10,
+    backgroundColor: '#F3F4F6', borderRadius: 12,
   },
-  addIconWrap: {
-    width: 36, height: 36, borderRadius: 12,
+  searchInput: { flex: 1, fontSize: 15, color: '#111' },
+
+  addRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 20, paddingVertical: 18,
+    borderBottomWidth: 1, borderBottomColor: '#F3F4F6',
+  },
+  addIcon: {
+    width: 44, height: 44, borderRadius: 22,
     backgroundColor: TEAL_LIGHT,
     alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: TEAL_BORDER,
+    marginRight: 16,
   },
-  addText: { flex: 1, fontSize: 15, fontWeight: '700', color: TEAL },
+  addText: { flex: 1, fontSize: 16, fontWeight: '700', color: TEAL },
+
+  sectionLabel: {
+    fontSize: 11, fontWeight: '800', color: '#9CA3AF',
+    letterSpacing: 1.2, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 10,
+  },
+
+  row: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 20, paddingVertical: 16,
+    borderBottomWidth: 1, borderBottomColor: '#F3F4F6',
+  },
+  flag:    { fontSize: 30, marginRight: 14, lineHeight: 36 },
+  rowBody: { flex: 1 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  name:    { fontSize: 16, fontWeight: '700', color: '#111827', flexShrink: 1 },
+  ccyBadge: {
+    backgroundColor: '#F3F4F6', borderRadius: 6,
+    paddingHorizontal: 7, paddingVertical: 2,
+  },
+  ccyText: { fontSize: 12, fontWeight: '700', color: '#374151' },
+  phone:   { fontSize: 13, color: '#374151', marginBottom: 2 },
+  sub:     { fontSize: 13, color: '#6B7280' },
+
+  emptyWrap:  { alignItems: 'center', paddingTop: 60, paddingHorizontal: 40 },
+  emptyIcon:  { fontSize: 48, marginBottom: 16 },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: '#111', marginBottom: 8 },
+  emptySub:   { fontSize: 14, color: '#9CA3AF', textAlign: 'center', lineHeight: 20 },
+})
+
+const m = StyleSheet.create({
+  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.45)' },
+  sheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 28, borderTopRightRadius: 28,
+    paddingHorizontal: 24, paddingTop: 12,
+  },
+  handle: {
+    width: 40, height: 4, borderRadius: 2,
+    backgroundColor: '#D1D5DB', alignSelf: 'center', marginBottom: 20,
+  },
+
+  recipientBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: '#F9FAFB', borderRadius: 16,
+    paddingHorizontal: 16, paddingVertical: 14, marginBottom: 20,
+  },
+  bannerFlag:  { fontSize: 32 },
+  bannerName:  { fontSize: 16, fontWeight: '800', color: '#111' },
+  bannerPhone: { fontSize: 13, color: '#6B7280', marginTop: 2 },
+
+  question: {
+    fontSize: 13, fontWeight: '700', color: '#9CA3AF',
+    letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 14,
+  },
+
+  optionRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 16,
+    paddingVertical: 16, paddingHorizontal: 16,
+    backgroundColor: '#F9FAFB', borderRadius: 16, marginBottom: 10,
+  },
+  optionIcon: {
+    width: 48, height: 48, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  optionLabel: { fontSize: 15, fontWeight: '700', color: '#111' },
+  optionSub:   { fontSize: 13, color: '#9CA3AF', marginTop: 2 },
 })

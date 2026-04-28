@@ -203,7 +203,11 @@ function AddCardForm({ onDone }) {
       Toast.show({ type: 'success', text1: 'Card added!' })
       onDone()
     } catch (err) {
-      Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Failed to add card' })
+      const detail = err.response?.data?.detail
+      const msg = Array.isArray(detail)
+        ? detail.map(d => d.msg || JSON.stringify(d)).join('\n')
+        : typeof detail === 'string' ? detail : err.message || 'Failed to add card.'
+      Alert.alert('Could Not Save Card', msg)
     } finally { setSaving(false) }
   }
 
@@ -231,29 +235,39 @@ function AddCardForm({ onDone }) {
 
 
 function AddACHForm({ onDone }) {
-  const [holderName, setHolderName] = useState('')
+  const [bankName, setBankName]           = useState('')
+  const [holderName, setHolderName]       = useState('')
   const [routingNumber, setRoutingNumber] = useState('')
   const [accountNumber, setAccountNumber] = useState('')
-  const [accountType, setAccountType] = useState('checking')
-  const [isDefault, setIsDefault] = useState(false)
-  const [saving, setSaving] = useState(false)
+  const [accountType, setAccountType]     = useState('checking')
+  const [isDefault, setIsDefault]         = useState(false)
+  const [saving, setSaving]               = useState(false)
 
   const submit = async () => {
-    if (routingNumber.length !== 9) return Toast.show({ type: 'error', text1: 'Routing number must be 9 digits' })
-    if (!accountNumber) return Toast.show({ type: 'error', text1: 'Account number is required' })
+    if (!bankName.trim())          return Alert.alert('Missing Field', 'Please enter the bank name.')
+    if (!holderName.trim())        return Alert.alert('Missing Field', 'Please enter the account holder name.')
+    if (routingNumber.length !== 9) return Alert.alert('Invalid Routing Number', 'Routing number must be exactly 9 digits.')
+    if (accountNumber.length < 4)  return Alert.alert('Invalid Account Number', 'Please enter a valid account number (min 4 digits).')
     setSaving(true)
     try {
-      await api.post('/payment-methods/ach', {
-        holder_name: holderName,
+      await api.post('/payment-methods/bank', {
+        bank_name:      bankName.trim(),
+        holder_name:    holderName.trim(),
         routing_number: routingNumber,
         account_number: accountNumber,
-        account_type: accountType,
-        set_default: isDefault,
+        account_type:   accountType,
+        set_default:    isDefault,
       })
-      Toast.show({ type: 'success', text1: 'ACH account added!' })
+      Toast.show({ type: 'success', text1: 'Bank account added!' })
       onDone()
     } catch (err) {
-      Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Failed to add ACH account' })
+      const detail = err.response?.data?.detail
+      const msg = Array.isArray(detail)
+        ? detail.map(d => d.msg || JSON.stringify(d)).join('\n')
+        : typeof detail === 'string'
+          ? detail
+          : err.response?.data?.message || err.message || 'Failed to save bank account.'
+      Alert.alert('Could Not Save Account', msg)
     } finally { setSaving(false) }
   }
 
@@ -261,22 +275,59 @@ function AddACHForm({ onDone }) {
     <View style={{ gap: 10 }}>
       <View style={sF.infoBanner}>
         <Text style={{ fontSize: 20 }}>🏛️</Text>
-        <Text style={sF.infoText}>Link your US bank account via ACH for direct bank transfers.</Text>
+        <Text style={sF.infoText}>Link your bank account for direct ACH transfers.</Text>
       </View>
-      <TextInput style={sF.input} placeholder="Account holder name" placeholderTextColor="#9CA3AF" value={holderName} onChangeText={setHolderName} />
-      <TextInput style={sF.input} placeholder="Routing number (9 digits)" placeholderTextColor="#9CA3AF" keyboardType="number-pad" maxLength={9} value={routingNumber} onChangeText={v => setRoutingNumber(v.replace(/\D/g, '').slice(0, 9))} />
-      <TextInput style={sF.input} placeholder="Account number" placeholderTextColor="#9CA3AF" keyboardType="number-pad" value={accountNumber} onChangeText={v => setAccountNumber(v.replace(/\D/g, ''))} />
+      <TextInput
+        style={sF.input}
+        placeholder="Bank name (e.g. Bank of America)"
+        placeholderTextColor="#9CA3AF"
+        value={bankName}
+        onChangeText={setBankName}
+      />
+      <TextInput
+        style={sF.input}
+        placeholder="Account holder name"
+        placeholderTextColor="#9CA3AF"
+        value={holderName}
+        onChangeText={setHolderName}
+      />
+      <TextInput
+        style={sF.input}
+        placeholder="Routing number (9 digits)"
+        placeholderTextColor="#9CA3AF"
+        keyboardType="number-pad"
+        maxLength={9}
+        value={routingNumber}
+        onChangeText={v => setRoutingNumber(v.replace(/\D/g, '').slice(0, 9))}
+      />
+      <TextInput
+        style={sF.input}
+        placeholder="Account number"
+        placeholderTextColor="#9CA3AF"
+        keyboardType="number-pad"
+        value={accountNumber}
+        onChangeText={v => setAccountNumber(v.replace(/\D/g, ''))}
+      />
       <View style={sF.segmentRow}>
-        <TouchableOpacity style={[sF.segment, accountType === 'checking' && sF.segmentActive]} onPress={() => setAccountType('checking')}>
+        <TouchableOpacity
+          style={[sF.segment, accountType === 'checking' && sF.segmentActive]}
+          onPress={() => setAccountType('checking')}
+        >
           <Text style={[sF.segmentText, accountType === 'checking' && sF.segmentTextActive]}>Checking</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[sF.segment, accountType === 'savings' && sF.segmentActive]} onPress={() => setAccountType('savings')}>
+        <TouchableOpacity
+          style={[sF.segment, accountType === 'savings' && sF.segmentActive]}
+          onPress={() => setAccountType('savings')}
+        >
           <Text style={[sF.segmentText, accountType === 'savings' && sF.segmentTextActive]}>Savings</Text>
         </TouchableOpacity>
       </View>
-      <View style={sF.switchRow}><Text style={sF.switchLabel}>Set as default</Text><Switch value={isDefault} onValueChange={setIsDefault} trackColor={{ true: '#4F46E5' }} /></View>
+      <View style={sF.switchRow}>
+        <Text style={sF.switchLabel}>Set as default</Text>
+        <Switch value={isDefault} onValueChange={setIsDefault} trackColor={{ true: '#4F46E5' }} />
+      </View>
       <TouchableOpacity style={[sF.btn, saving && sF.btnDisabled]} onPress={submit} disabled={saving}>
-        {saving ? <Spinner size="sm" color="#fff" /> : <Text style={sF.btnText}>Add ACH Account</Text>}
+        {saving ? <Spinner size="sm" color="#fff" /> : <Text style={sF.btnText}>Add Bank Account</Text>}
       </TouchableOpacity>
     </View>
   )

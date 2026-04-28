@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ScrollView, KeyboardAvoidingView, Platform, Modal,
+  ScrollView, KeyboardAvoidingView, Platform, Modal, Alert,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useNavigation, useRoute } from '@react-navigation/native'
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
 import Toast from 'react-native-toast-message'
 import { ChevronDown, UserPlus, CheckCircle, ArrowRight, Zap, Shield, Clock, Mail } from 'lucide-react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
@@ -230,6 +230,7 @@ export default function SendMoneyScreen() {
   const [delivery, setDelivery]             = useState(route.params?.delivery || 'wallet')
   const [description, setDescription]       = useState('')
   const [amount, setAmount]                 = useState('')
+  const [recipientName, setRecipientName]   = useState('')
   const [destCountry, setDestCountry]       = useState(DEST_COUNTRIES[16])
   const [showCountryPicker, setShowCountryPicker] = useState(false)
   const [liveRate, setLiveRate]             = useState(null)
@@ -243,7 +244,9 @@ export default function SendMoneyScreen() {
   const [transactions, setTransactions]     = useState([])
   const [paymentMethods, setPaymentMethods] = useState([])
   const [selectedPayMethod, setSelectedPayMethod] = useState(null) // null = wallet
-  const [showPayPicker, setShowPayPicker]   = useState(false)
+  const [paymentChosen, setPaymentChosen]         = useState(false)
+  const [showPayPicker, setShowPayPicker]         = useState(false)
+  const [showInsufficientModal, setShowInsufficientModal] = useState(false)
 
   const senderCcy    = wallet?.currency || 'USD'
   const destCcy      = destCountry.currency
@@ -254,7 +257,9 @@ export default function SendMoneyScreen() {
   const receivedAmt  = effectiveRate && netAmt > 0
     ? parseFloat((netAmt * effectiveRate).toFixed(2))
     : null
-  const isValid = toPhone.trim().length > 5 && sendAmt > 0
+  const isValid    = toPhone.trim().length > 5 && sendAmt > 0
+  const savedCards = paymentMethods.filter(m => m.type === 'card')
+  const savedACH   = paymentMethods.filter(m => m.type === 'ach' || m.type === 'bank_transfer')
 
   const initials = user?.full_name
     ? user.full_name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
@@ -296,9 +301,13 @@ export default function SendMoneyScreen() {
 
   useEffect(() => {
     api.get('/wallet/balance').then(({ data }) => setWallet(data)).catch(() => {})
-    api.get('/transactions?limit=5').then(({ data }) => setTransactions(data.transactions || [])).catch(() => {})
+    api.get('/wallet/transactions?page=1&limit=5').then(({ data }) => setTransactions(data.transactions || [])).catch(() => {})
     api.get('/payment-methods').then(({ data }) => setPaymentMethods(data.payment_methods || [])).catch(() => {})
   }, [])
+
+  useFocusEffect(useCallback(() => {
+    api.get('/payment-methods').then(({ data }) => setPaymentMethods(data.payment_methods || [])).catch(() => {})
+  }, []))
 
   const fetchQuote = useCallback(async (phone, amt, recvCcy) => {
     if (!phone || !amt || parseFloat(amt) <= 0) { setQuote(null); return }
@@ -318,64 +327,81 @@ export default function SendMoneyScreen() {
     return () => clearTimeout(t)
   }, [toPhone, amount, destCcy, fetchQuote])
 
-  // Phase 1: confirm funds exist before sending
-  const verifyPayment = async () => {
-    const { data: freshWallet } = await api.get('/wallet/balance')
-    setWallet(freshWallet)
-    if (parseFloat(freshWallet.balance) < sendAmt) {
-      throw new Error(
-        `Insufficient balance. Available: ${fmt(parseFloat(freshWallet.balance), senderCcy)}`
-      )
-    }
+  // Reset manual name when phone changes
+  useEffect(() => { setRecipientName('') }, [toPhone])
+
+  const walletBalance = parseFloat(wallet?.balance || 0)
+  const shortfall     = Math.max(0, parseFloat((sendAmt - walletBalance).toFixed(2)))
+
+  // Phase 1: verify wallet has enough — throws typed error on shortfall
+  // Insufficient-balance modal chose a card — select it and stay on confirm sheet
+  const selectMethodAndConfirm = (method) => {
+    setSelectedPayMethod(method)
+    setPaymentChosen(true)
+    setShowInsufficientModal(false)
   }
 
-  // "Continue to send" — verify funds then show confirmation sheet
-  const handleContinue = async () => {
+  const goAddPaymentMethod = () => {
+    setShowPayPicker(false)
+    setShowConfirm(false)
+    navigation.navigate('PaymentMethods')
+  }
+
+  // "Continue to send" — validate fields then open confirmation sheet
+  const handleContinue = () => {
     if (!toPhone.trim()) return Toast.show({ type: 'error', text1: 'Enter recipient phone' })
     if (!amount || sendAmt <= 0) return Toast.show({ type: 'error', text1: 'Enter an amount' })
-    setLoading(true)
-    try {
-      await verifyPayment()
-      setShowConfirm(true)
-    } catch (err) {
-      Toast.show({ type: 'error', text1: err.response?.data?.detail || err.message || 'Transfer failed' })
-    } finally {
-      setLoading(false)
-    }
+    // Reset payment selection so user must choose on confirm sheet
+    setSelectedPayMethod(null)
+    setPaymentChosen(false)
+    setShowConfirm(true)
   }
 
   // "Confirm transfer" — routes to the correct backend endpoint per delivery method
   const confirmTransfer = async () => {
     setConfirming(true)
     try {
-      let responseData
+      // Wallet selected — pre-check balance (skip on network error, let backend validate)
+      if (selectedPayMethod === null) {
+        try {
+          const { data: freshWallet } = await api.get('/wallet/balance')
+          setWallet(freshWallet)
+          if (parseFloat(freshWallet.balance) < sendAmt) {
+            setShowInsufficientModal(true)
+            return
+          }
+        } catch (balanceErr) {
+          // If balance check itself fails due to network, proceed — backend will reject if needed
+          console.warn('Balance pre-check failed, proceeding to API:', balanceErr.message)
+        }
+      }
 
+      let responseData
       const payMethodId = selectedPayMethod?.id || null
+
+      const resolvedRecipientName = quote?.recipient_name || recipientName.trim() || null
 
       if (delivery === 'wave') {
         const { data } = await api.post('/transfer/wave', {
-          to_phone:           toPhone,
-          amount:             sendAmt,
-          recv_currency:      destCcy,
+          to_phone:       toPhone,
+          amount:         sendAmt,
+          recv_currency:  destCcy,
           description,
+          recipient_name: resolvedRecipientName,
           ...(payMethodId && { payment_method_id: payMethodId }),
         })
         responseData = data
 
       } else if (delivery === 'cash') {
-        const agentsRes = await api.get(
-          `/transfer/agents?country=${encodeURIComponent(destCountry.name)}`
-        )
+        const agentsRes = await api.get(`/transfer/agents?country=${encodeURIComponent(destCountry.name)}`)
         const agents = agentsRes.data?.agents || []
-        if (!agents.length) {
-          throw new Error(`No cash pickup agents available in ${destCountry.name}`)
-        }
+        if (!agents.length) throw new Error(`No cash pickup agents available in ${destCountry.name}`)
         const { data } = await api.post('/transfer/cash-pickup', {
-          to_phone:           toPhone,
-          recipient_name:     quote?.recipient_name || toPhone,
-          amount:             sendAmt,
-          recv_currency:      destCcy,
-          agent_id:           agents[0].id,
+          to_phone:       toPhone,
+          recipient_name: resolvedRecipientName || toPhone,
+          amount:         sendAmt,
+          recv_currency:  destCcy,
+          agent_id:       agents[0].id,
           description,
           ...(payMethodId && { payment_method_id: payMethodId }),
         })
@@ -383,28 +409,33 @@ export default function SendMoneyScreen() {
 
       } else {
         const { data } = await api.post('/transfer/send', {
-          to_phone:           toPhone,
-          amount:             sendAmt,
-          recv_currency:      destCcy,
+          to_phone:      toPhone,
+          amount:        sendAmt,
+          recv_currency: destCcy,
           description,
           ...(payMethodId && { payment_method_id: payMethodId }),
         })
         responseData = data
       }
 
-      // Inject recipient_name (backends don't return it for wave/wallet)
+      if (!responseData) return
+
+      const resolvedName =
+        quote?.recipient_name ||
+        recipientName.trim() ||
+        responseData?.recipient_name ||
+        null
       const enriched = {
-        ...responseData,
-        recipient_name: responseData.recipient_name || quote?.recipient_name || toPhone,
+        ...(responseData || {}),
+        recipient_name: resolvedName,
       }
 
-      const sentAt = new Date().toISOString()
       setShowConfirm(false)
       notifySender(enriched)
       notifyRecipient(enriched, toPhone)
       sendReceipt(enriched, user?.email, user?.full_name)
-      setResult({ ...enriched, sent_at: sentAt })
-      Toast.show({ type: 'success', text1: 'Transfer sent!' })
+      setResult({ ...enriched, sent_at: new Date().toISOString() })
+
     } catch (err) {
       const msg =
         err.response?.data?.detail ||
@@ -412,8 +443,9 @@ export default function SendMoneyScreen() {
         err.response?.data?.error ||
         (typeof err.response?.data === 'string' ? err.response.data : null) ||
         err.message ||
-        'Transfer failed'
-      Toast.show({ type: 'error', text1: String(msg) })
+        'Transfer failed. Please try again.'
+      // Alert renders above the modal so the user always sees the error
+      Alert.alert('Transfer Failed', String(msg))
     } finally {
       setConfirming(false)
     }
@@ -444,7 +476,9 @@ export default function SendMoneyScreen() {
         {/* Recipient + received amount hero */}
         <View style={s.successHero}>
           <Text style={s.successHeroLabel}>
-            {result.recipient_name || toPhone} will receive
+            {result.recipient_name && result.recipient_name !== toPhone
+              ? result.recipient_name
+              : toPhone} will receive
           </Text>
           <Text style={s.successHeroAmount}>
             {result.received_amount?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
@@ -455,7 +489,9 @@ export default function SendMoneyScreen() {
         {/* Receipt card */}
         <View style={s.successCard}>
           <Text style={s.receiptCardTitle}>Receipt</Text>
-          <SuccessRow label="Recipient"    value={result.recipient_name || toPhone} />
+          {result.recipient_name && result.recipient_name !== toPhone && (
+            <SuccessRow label="Recipient" value={result.recipient_name} />
+          )}
           <SuccessRow label="Phone"        value={toPhone} />
           <SuccessRow label="You sent"     value={fmt(result.send_amount, result.send_currency)} bold />
           <SuccessRow label="Fee (1.5%)"   value={fmt(result.fee, result.send_currency)} />
@@ -580,7 +616,7 @@ export default function SendMoneyScreen() {
             />
             <TouchableOpacity
               style={s.addRecipientBtn}
-              onPress={() => navigation.navigate('Recipients', { country_name: destCountry.name, to_phone: toPhone })}
+              onPress={() => navigation.navigate('Recipients')}
               activeOpacity={0.7}
             >
               <UserPlus size={18} color={TEAL} />
@@ -598,6 +634,18 @@ export default function SendMoneyScreen() {
             <View style={s.statusRow}>
               <CheckCircle size={14} color="#10B981" />
               <Text style={[s.statusText, { color: '#10B981' }]}>{quote.recipient_name} · Verified</Text>
+            </View>
+          )}
+          {!quoteLoading && toPhone.length > 5 && quote && !quote.recipient_found && (
+            <View style={s.nameInputWrap}>
+              <TextInput
+                style={s.nameInput}
+                placeholder="Recipient full name (required)"
+                placeholderTextColor="#A0AEC0"
+                value={recipientName}
+                onChangeText={setRecipientName}
+                autoCorrect={false}
+              />
             </View>
           )}
 
@@ -715,17 +763,15 @@ export default function SendMoneyScreen() {
         {/* ── Recent transactions ── */}
         <View style={s.txSection}>
           <View style={s.txHeader}>
-            <Text style={s.txTitle}>Recent</Text>
+            <Text style={s.txTitle}>Transactions</Text>
             <TouchableOpacity onPress={() => navigation.navigate('Transactions')} activeOpacity={0.7}>
               <Text style={s.seeAll}>See all</Text>
             </TouchableOpacity>
           </View>
-          <View style={s.txCard}>
-            {transactions.length === 0
-              ? <Text style={s.txEmpty}>No transactions yet</Text>
-              : transactions.map((tx, i) => <TxRow key={tx.id} tx={tx} last={i === transactions.length - 1} />)
-            }
-          </View>
+          {transactions.length === 0
+            ? <Text style={s.txEmpty}>No transactions yet</Text>
+            : transactions.map(tx => <TxRow key={tx.id} tx={tx} />)
+          }
         </View>
 
       </ScrollView>
@@ -738,168 +784,306 @@ export default function SendMoneyScreen() {
         onRequestClose={() => setShowConfirm(false)}
       >
         <View style={cs.overlay}>
-          <View style={[cs.sheet, { paddingBottom: insets.bottom + 20 }]}>
+          <View style={[cs.sheet, { paddingBottom: insets.bottom + 16 }]}>
 
-            {/* Close */}
-            <TouchableOpacity style={cs.closeBtn} onPress={() => setShowConfirm(false)} activeOpacity={0.7}>
-              <Text style={cs.closeX}>✕</Text>
-            </TouchableOpacity>
+            {/* Drag handle */}
+            <View style={cs.handle} />
 
-            <ScrollView showsVerticalScrollIndicator={false}>
+            {/* Sheet header */}
+            <View style={cs.sheetHeader}>
+              <Text style={cs.sheetTitle}>Review Transfer</Text>
+              <TouchableOpacity style={cs.closeCircle} onPress={() => setShowConfirm(false)} activeOpacity={0.7}>
+                <Text style={cs.closeX}>✕</Text>
+              </TouchableOpacity>
+            </View>
 
-              {/* Recipient */}
-              <ConfirmRow label="Recipient" noDivider={false}>
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', flex: 1 }}>
-                  <View>
-                    <Text style={cs.valueMain}>{quote?.recipient_name || toPhone}</Text>
-                    <Text style={cs.valueSub}>{toPhone}</Text>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
+
+              {/* ── Hero card ── */}
+              <View style={cs.heroCard}>
+                <Text style={cs.heroLabel}>You're sending</Text>
+                <Text style={cs.heroAmount}>
+                  {sendAmt.toFixed(2)}{' '}
+                  <Text style={cs.heroCcy}>{senderCcy}</Text>
+                </Text>
+                {receivedAmt != null && (
+                  <View style={cs.heroConvertRow}>
+                    <Text style={cs.heroArrow}>→</Text>
+                    <Text style={cs.heroConverted}>
+                      {receivedAmt.toLocaleString(undefined, { maximumFractionDigits: 2 })} {destCcy}
+                    </Text>
                   </View>
-                  <Text style={{ fontSize: 24 }}>{destCountry.flag}</Text>
+                )}
+                <View style={cs.heroDivider} />
+                <View style={cs.heroRecipientRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={cs.heroName}>{quote?.recipient_name || recipientName.trim() || toPhone}</Text>
+                    <Text style={cs.heroSub}>
+                      {toPhone}{'  ·  '}
+                      {delivery === 'wave' ? 'Wave Mobile Money' : delivery === 'cash' ? 'Cash Pickup' : 'Mobile Wallet'}
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 30 }}>{destCountry.flag}</Text>
                 </View>
-              </ConfirmRow>
-
-              {/* Transfer Amount */}
-              <ConfirmRow label="Transfer Amount">
-                <Text style={cs.valueMain}>{sendAmt.toFixed(2)} {senderCcy}</Text>
-              </ConfirmRow>
-
-              {/* Transfer Fees */}
-              <ConfirmRow label="Transfer Fees">
-                <Text style={cs.valueMain}>{fee.toFixed(2)} {senderCcy}</Text>
-              </ConfirmRow>
-
-              {/* Exchange Rate */}
-              <ConfirmRow label="Exchange Rate">
-                <Text style={cs.valueMain}>
-                  1 {senderCcy} = {effectiveRate ? effectiveRate.toFixed(2) : '—'} {destCcy}
-                </Text>
-              </ConfirmRow>
-
-              {/* Total to Recipient */}
-              <ConfirmRow label={`Total to\nRecipient`}>
-                <View>
-                  <Text style={cs.valueMain}>
-                    {receivedAmt != null ? receivedAmt.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—'} {destCcy}
-                  </Text>
-                  <Text style={cs.valueNote}>
-                    Your recipient may receive less due to fees charged by the mobile wallet provider, by a bank, and/or foreign taxes.
-                  </Text>
-                </View>
-              </ConfirmRow>
-
-              {/* Estimated Delivery */}
-              <ConfirmRow label={`Estimated\nDelivery By`}>
-                <Text style={cs.valueMain}>Under a minute</Text>
-              </ConfirmRow>
-
-              {/* Pay with */}
-              <ConfirmRow label="Pay with">
-                <TouchableOpacity
-                  style={{ flexDirection: 'row', alignItems: 'center', flex: 1, justifyContent: 'space-between' }}
-                  onPress={() => setShowPayPicker(true)}
-                  activeOpacity={0.7}
-                >
-                  {selectedPayMethod ? (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                      <PayMethodBadge method={selectedPayMethod} />
-                      <View>
-                        <Text style={cs.valueMain}>{selectedPayMethod.label}</Text>
-                        <Text style={cs.valueSub}>{selectedPayMethod.type === 'card' && selectedPayMethod.expiry_month ? `Expires ${String(selectedPayMethod.expiry_month).padStart(2,'0')}/${selectedPayMethod.expiry_year}` : selectedPayMethod.type.replace('_', ' ')}</Text>
-                      </View>
-                    </View>
-                  ) : (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                      <View style={cs.walletBadge}><Text style={cs.walletBadgeText}>W</Text></View>
-                      <View>
-                        <Text style={cs.valueMain}>Wallet</Text>
-                        <Text style={cs.valueSub}>{wallet ? `${Number(wallet.balance).toLocaleString()} ${senderCcy}` : 'Balance'}</Text>
-                      </View>
-                    </View>
-                  )}
-                  <Text style={{ color: '#BBBBBB', fontSize: 18 }}>›</Text>
-                </TouchableOpacity>
-              </ConfirmRow>
-
-              {/* Total Amount */}
-              <ConfirmRow label="Total Amount">
-                <Text style={[cs.valueMain, { fontWeight: '800', fontSize: 20 }]}>{sendAmt.toFixed(2)} {senderCcy}</Text>
-              </ConfirmRow>
-
-              {/* Fraud warning */}
-              <View style={cs.fraudBox}>
-                <Text style={cs.fraudText}>
-                  Please be sure you know your recipient. Fraudulent transactions may result in the loss of your money with no recourse. To report fraud or suspected fraud, call 701-515-4355.
-                </Text>
               </View>
+
+              {/* ── Breakdown card ── */}
+              <View style={cs.breakCard}>
+                <BreakRow label="Transfer fees"   value={`${fee.toFixed(2)} ${senderCcy}`} />
+                <BreakRow label="Exchange rate"   value={effectiveRate ? `1 ${senderCcy} = ${effectiveRate.toFixed(2)} ${destCcy}` : '—'} />
+                <BreakRow label="Recipient gets"  value={receivedAmt != null ? `${receivedAmt.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${destCcy}` : '—'} />
+                <BreakRow label="Delivery"        value="Under a minute" last />
+              </View>
+              <Text style={cs.receiveNote}>* Recipient may receive less due to provider fees or foreign taxes.</Text>
+
+              {/* ── Pay with ── */}
+              <TouchableOpacity
+                style={[cs.payBlock, !paymentChosen && cs.payBlockUnchosen]}
+                onPress={() => setShowPayPicker(true)}
+                activeOpacity={0.8}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={cs.payBlockLabel}>PAY WITH</Text>
+                  {paymentChosen ? (
+                    selectedPayMethod ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 6 }}>
+                        <PayMethodBadge method={selectedPayMethod} />
+                        <View>
+                          <Text style={cs.payBlockValue} numberOfLines={1}>{selectedPayMethod.label}</Text>
+                          {selectedPayMethod.last_four
+                            ? <Text style={cs.payBlockSub}>•••{selectedPayMethod.last_four}</Text>
+                            : null}
+                        </View>
+                      </View>
+                    ) : (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 6 }}>
+                        <View style={cs.walletBadge}><Text style={cs.walletBadgeText}>W</Text></View>
+                        <View>
+                          <Text style={cs.payBlockValue}>Wallet</Text>
+                          <Text style={cs.payBlockSub}>{wallet ? `${Number(wallet.balance).toLocaleString()} ${senderCcy}` : ''}</Text>
+                        </View>
+                      </View>
+                    )
+                  ) : (
+                    <Text style={cs.payBlockPlaceholder}>Tap to select a payment method</Text>
+                  )}
+                </View>
+                <Text style={cs.payBlockChevron}>›</Text>
+              </TouchableOpacity>
+
+              {/* ── Total charged ── */}
+              <View style={cs.totalBlock}>
+                <Text style={cs.totalLabel}>Total charged</Text>
+                <Text style={cs.totalValue}>{sendAmt.toFixed(2)} {senderCcy}</Text>
+              </View>
+
+              {/* ── Disclaimer ── */}
+              <Text style={cs.disclaimerText}>
+                Please be sure you know your recipient. Fraudulent transactions may result in the loss of your money with no recourse. To report fraud call 701-515-4355.
+              </Text>
 
             </ScrollView>
 
-            {/* Confirm button */}
+            {/* ── Confirm button ── */}
             <TouchableOpacity
-              style={[cs.confirmBtn, confirming && { opacity: 0.7 }]}
+              style={[cs.confirmBtn, (!paymentChosen || confirming) && cs.confirmBtnDisabled]}
               onPress={confirmTransfer}
-              disabled={confirming}
+              disabled={!paymentChosen || confirming}
               activeOpacity={0.85}
             >
               {confirming
                 ? <Spinner size="sm" color="#7A6000" />
-                : <Text style={cs.confirmBtnText}>Confirm transfer</Text>
+                : <Text style={[cs.confirmBtnText, !paymentChosen && cs.confirmBtnTextDisabled]}>
+                    {paymentChosen ? 'Confirm transfer' : 'Select a payment method'}
+                  </Text>
               }
             </TouchableOpacity>
 
-            {/* ── Payment picker overlay (inside modal to avoid stacking two Modals) ── */}
+            {/* ── Payment picker overlay ── */}
             {showPayPicker && (
               <View style={cs.pickerOverlay}>
                 <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowPayPicker(false)} />
                 <View style={[cs.pickerSheet, { paddingBottom: insets.bottom + 20 }]}>
                   <View style={cs.pickerHeader}>
                     <Text style={cs.pickerTitle}>Pay with</Text>
-                    <TouchableOpacity onPress={() => setShowPayPicker(false)} style={cs.closeBtn} activeOpacity={0.7}>
+                    <TouchableOpacity onPress={() => setShowPayPicker(false)} style={cs.pickerCloseBtn} activeOpacity={0.7}>
                       <Text style={cs.closeX}>✕</Text>
                     </TouchableOpacity>
                   </View>
 
-                  {/* Wallet option */}
-                  <TouchableOpacity
-                    style={[cs.pickerRow, !selectedPayMethod && cs.pickerRowSelected]}
-                    onPress={() => { setSelectedPayMethod(null); setShowPayPicker(false) }}
-                    activeOpacity={0.75}
-                  >
-                    <View style={cs.walletBadge}><Text style={cs.walletBadgeText}>W</Text></View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={cs.pickerLabel}>Wallet</Text>
-                      <Text style={cs.pickerSub}>{wallet ? `${Number(wallet.balance).toLocaleString()} ${senderCcy}` : 'Balance'}</Text>
-                    </View>
-                    {!selectedPayMethod && <View style={cs.selectedDot} />}
-                  </TouchableOpacity>
+                  <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 420 }}>
 
-                  {/* Saved payment methods */}
-                  {paymentMethods.map(m => (
+                    {/* ── Wallet ── */}
+                    <Text style={cs.pickerSection}>Wallet</Text>
                     <TouchableOpacity
-                      key={m.id}
-                      style={[cs.pickerRow, selectedPayMethod?.id === m.id && cs.pickerRowSelected]}
-                      onPress={() => { setSelectedPayMethod(m); setShowPayPicker(false) }}
+                      style={[cs.pickerRow, paymentChosen && !selectedPayMethod && cs.pickerRowSelected]}
+                      onPress={() => { setSelectedPayMethod(null); setPaymentChosen(true); setShowPayPicker(false) }}
                       activeOpacity={0.75}
                     >
-                      <PayMethodBadge method={m} />
+                      <View style={cs.walletBadge}><Text style={cs.walletBadgeText}>W</Text></View>
                       <View style={{ flex: 1 }}>
-                        <Text style={cs.pickerLabel}>{m.label}</Text>
-                        <Text style={cs.pickerSub}>
-                          {m.type === 'card' && m.expiry_month
-                            ? `Expires ${String(m.expiry_month).padStart(2, '0')}/${m.expiry_year}`
-                            : m.type.replace('_', ' ')}
-                        </Text>
+                        <Text style={cs.pickerLabel}>Wallet</Text>
+                        <Text style={cs.pickerSub}>{wallet ? `${Number(wallet.balance).toLocaleString()} ${senderCcy}` : 'Balance'}</Text>
                       </View>
-                      {selectedPayMethod?.id === m.id && <View style={cs.selectedDot} />}
+                      {paymentChosen && !selectedPayMethod && <View style={cs.selectedDot} />}
                     </TouchableOpacity>
-                  ))}
 
-                  {paymentMethods.length === 0 && (
-                    <Text style={cs.pickerEmpty}>No saved payment methods. Add one in Settings.</Text>
-                  )}
+                    {/* ── Credit / Debit Card ── */}
+                    <Text style={cs.pickerSection}>Credit / Debit Card</Text>
+                    {savedCards.length > 0 ? savedCards.map(m => (
+                      <TouchableOpacity
+                        key={m.id}
+                        style={[cs.pickerRow, selectedPayMethod?.id === m.id && cs.pickerRowSelected]}
+                        onPress={() => { setSelectedPayMethod(m); setPaymentChosen(true); setShowPayPicker(false) }}
+                        activeOpacity={0.75}
+                      >
+                        <PayMethodBadge method={m} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={cs.pickerLabel}>{m.label}</Text>
+                          <Text style={cs.pickerSub}>
+                            {m.last_four ? `•••${m.last_four}` : m.expiry_month ? `Expires ${String(m.expiry_month).padStart(2,'0')}/${m.expiry_year}` : 'Card'}
+                          </Text>
+                        </View>
+                        {selectedPayMethod?.id === m.id && <View style={cs.selectedDot} />}
+                      </TouchableOpacity>
+                    )) : (
+                      <TouchableOpacity style={cs.pickerAddRow} onPress={goAddPaymentMethod} activeOpacity={0.75}>
+                        <View style={[cs.walletBadge, { backgroundColor: '#F3F4F6', width: 44 }]}>
+                          <Text style={{ fontSize: 16 }}>💳</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={cs.pickerLabel}>Credit or Debit Card</Text>
+                          <Text style={cs.pickerSub}>Add a new card</Text>
+                        </View>
+                        <Text style={cs.pickerAddChevron}>›</Text>
+                      </TouchableOpacity>
+                    )}
+
+                    {/* ── ACH Bank Transfer ── */}
+                    <Text style={cs.pickerSection}>ACH Bank Transfer</Text>
+                    {savedACH.length > 0 ? savedACH.map(m => (
+                      <TouchableOpacity
+                        key={m.id}
+                        style={[cs.pickerRow, selectedPayMethod?.id === m.id && cs.pickerRowSelected]}
+                        onPress={() => { setSelectedPayMethod(m); setPaymentChosen(true); setShowPayPicker(false) }}
+                        activeOpacity={0.75}
+                      >
+                        <PayMethodBadge method={m} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={cs.pickerLabel}>{m.label}</Text>
+                          <Text style={cs.pickerSub}>Bank account</Text>
+                        </View>
+                        {selectedPayMethod?.id === m.id && <View style={cs.selectedDot} />}
+                      </TouchableOpacity>
+                    )) : (
+                      <TouchableOpacity style={cs.pickerAddRow} onPress={goAddPaymentMethod} activeOpacity={0.75}>
+                        <View style={[cs.walletBadge, { backgroundColor: '#F3F4F6', width: 44 }]}>
+                          <Text style={{ fontSize: 16 }}>🏛</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={cs.pickerLabel}>ACH Bank Transfer</Text>
+                          <Text style={cs.pickerSub}>Add a bank account</Text>
+                        </View>
+                        <Text style={cs.pickerAddChevron}>›</Text>
+                      </TouchableOpacity>
+                    )}
+
+                  </ScrollView>
                 </View>
               </View>
             )}
+
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Insufficient balance modal ── */}
+      <Modal
+        visible={showInsufficientModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowInsufficientModal(false)}
+      >
+        <View style={cs.overlay}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowInsufficientModal(false)} />
+          <View style={[ib.sheet, { paddingBottom: insets.bottom + 24 }]}>
+
+            {/* Header */}
+            <View style={ib.header}>
+              <View style={ib.warningIcon}>
+                <Text style={{ fontSize: 24 }}>⚠️</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={ib.title}>Insufficient Balance</Text>
+                <Text style={ib.sub}>Your wallet doesn't have enough funds</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowInsufficientModal(false)} style={cs.closeCircle} activeOpacity={0.7}>
+                <Text style={cs.closeX}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Balance breakdown */}
+            <View style={ib.breakdownCard}>
+              <View style={ib.breakdownRow}>
+                <Text style={ib.breakdownLabel}>Your balance</Text>
+                <Text style={ib.breakdownValue}>{fmt(walletBalance, senderCcy)}</Text>
+              </View>
+              <View style={ib.breakdownRow}>
+                <Text style={ib.breakdownLabel}>Transfer amount</Text>
+                <Text style={ib.breakdownValue}>{fmt(sendAmt, senderCcy)}</Text>
+              </View>
+              <View style={[ib.breakdownRow, { borderBottomWidth: 0 }]}>
+                <Text style={[ib.breakdownLabel, { color: '#EF4444', fontWeight: '700' }]}>Shortfall</Text>
+                <Text style={[ib.breakdownValue, { color: '#EF4444', fontWeight: '800' }]}>
+                  {fmt(shortfall, senderCcy)}
+                </Text>
+              </View>
+            </View>
+
+            {/* Option 1 — Pay with a saved card */}
+            {paymentMethods.length > 0 && (
+              <View style={ib.section}>
+                <Text style={ib.sectionTitle}>Pay with a saved method</Text>
+                {paymentMethods.map(m => (
+                  <TouchableOpacity
+                    key={m.id}
+                    style={ib.methodRow}
+                    onPress={() => selectMethodAndConfirm(m)}
+                    activeOpacity={0.75}
+                  >
+                    <PayMethodBadge method={m} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={ib.methodLabel}>{m.label}</Text>
+                      <Text style={ib.methodSub}>
+                        {m.type === 'card' && m.expiry_month
+                          ? `Expires ${String(m.expiry_month).padStart(2,'0')}/${m.expiry_year}`
+                          : m.type.replace('_', ' ')}
+                      </Text>
+                    </View>
+                    <Text style={{ color: '#D1D5DB', fontSize: 18 }}>›</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            {/* Option 2 — Add funds to wallet */}
+            <TouchableOpacity
+              style={ib.addFundsBtn}
+              onPress={() => { setShowInsufficientModal(false); navigation.navigate('CashIn') }}
+              activeOpacity={0.85}
+            >
+              <Text style={ib.addFundsBtnText}>+ Add Funds to Wallet</Text>
+              <Text style={ib.addFundsBtnSub}>Top up {fmt(shortfall, senderCcy)} or more</Text>
+            </TouchableOpacity>
+
+            {/* Cancel */}
+            <TouchableOpacity
+              style={ib.cancelBtn}
+              onPress={() => setShowInsufficientModal(false)}
+              activeOpacity={0.75}
+            >
+              <Text style={ib.cancelBtnText}>Cancel</Text>
+            </TouchableOpacity>
 
           </View>
         </View>
@@ -927,35 +1111,35 @@ function PayMethodBadge({ method }) {
 }
 
 function TxRow({ tx }) {
+  const d = tx.extra_data || {}
+  const recipientName  = tx.recipient_name  ?? d.recipient_name  ?? tx.to_phone ?? 'Unknown'
+  const sendAmount     = tx.send_amount     ?? d.send_amount     ?? tx.amount
+  const sendCurrency   = tx.send_currency   ?? d.send_currency   ?? tx.currency
+  const receivedAmount = tx.received_amount ?? d.received_amount ?? d.net_send_amount
+  const recvCurrency   = tx.recv_currency   ?? d.recv_currency
+
   const isDelivered = tx.status === 'completed'
   const date = tx.created_at
     ? new Date(tx.created_at).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })
     : ''
+  const fmt2 = n => n != null ? Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'
   return (
     <View style={t.row}>
-      <View style={{ flex: 1 }}>
-        <Text style={t.name}>{tx.recipient_name || tx.to_phone || 'Unknown'}</Text>
+      <View style={{ flex: 1, marginRight: 12 }}>
+        <Text style={t.name} numberOfLines={1}>{recipientName}</Text>
         <View style={t.meta}>
           <Text style={t.date}>{date}</Text>
-          {isDelivered && (
-            <View style={t.badge}>
-              <Text style={t.badgeText}>DELIVERED</Text>
-            </View>
-          )}
-          {!isDelivered && tx.status && (
-            <View style={[t.badge, { backgroundColor: '#FEF9C3' }]}>
-              <Text style={[t.badgeText, { color: '#92400E' }]}>{tx.status.toUpperCase()}</Text>
-            </View>
-          )}
+          {isDelivered
+            ? <View style={t.badge}><Text style={t.badgeText}>DELIVERED</Text></View>
+            : tx.status
+              ? <View style={t.badgePending}><Text style={t.badgePendingText}>{tx.status.toUpperCase()}</Text></View>
+              : null
+          }
         </View>
       </View>
       <View style={{ alignItems: 'flex-end' }}>
-        <Text style={t.amount}>
-          {tx.send_amount?.toLocaleString(undefined, { maximumFractionDigits: 2 })} {tx.send_currency}
-        </Text>
-        <Text style={t.subAmount}>
-          {tx.received_amount?.toLocaleString(undefined, { maximumFractionDigits: 2 })} {tx.recv_currency}
-        </Text>
+        <Text style={t.amount}>{fmt2(sendAmount)} {sendCurrency}</Text>
+        <Text style={t.subAmount}>{fmt2(receivedAmount)} {recvCurrency}</Text>
       </View>
     </View>
   )
@@ -1050,6 +1234,14 @@ const s = StyleSheet.create({
   statusText: { fontSize: 13, color: '#9CA3AF' },
 
   cardDivider: { height: 1, backgroundColor: '#F3F4F6', marginVertical: 16 },
+  nameInputWrap: {
+    marginBottom: 6, paddingLeft: 52,
+  },
+  nameInput: {
+    fontSize: 14, color: '#111',
+    borderBottomWidth: 1, borderBottomColor: '#E5E7EB',
+    paddingVertical: 6,
+  },
 
   // Amount columns
   amountSection: {
@@ -1128,16 +1320,11 @@ const s = StyleSheet.create({
   waveWord: { fontSize: 14, fontWeight: '800', color: '#fff', letterSpacing: 1 },
 
   // ── Transactions ──────────────────────────────────────────────────────────────
-  txSection: { marginHorizontal: 16, marginBottom: 24 },
-  txHeader:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  txTitle:   { fontSize: 18, fontWeight: '800', color: '#111' },
-  seeAll:    { fontSize: 14, fontWeight: '600', color: TEAL },
-  txCard:    {
-    backgroundColor: '#fff', borderRadius: 16,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
-    overflow: 'hidden',
-  },
-  txEmpty: { fontSize: 13, color: '#BBBBBB', textAlign: 'center', paddingVertical: 24 },
+  txSection: { marginHorizontal: 20, marginBottom: 32 },
+  txHeader:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  txTitle:   { fontSize: 26, fontWeight: '800', color: '#111827' },
+  seeAll:    { fontSize: 15, fontWeight: '600', color: TEAL, textDecorationLine: 'underline' },
+  txEmpty:   { fontSize: 14, color: '#9CA3AF', textAlign: 'center', paddingVertical: 32 },
 
   // ── Success / Receipt screen ──────────────────────────────────────────────────
   successWrap:          { paddingHorizontal: 24, alignItems: 'center' },
@@ -1159,81 +1346,173 @@ const s = StyleSheet.create({
 })
 
 const t = StyleSheet.create({
-  row:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
-  name:     { fontSize: 15, fontWeight: '700', color: '#111', marginBottom: 4 },
-  meta:     { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  date:     { fontSize: 13, color: '#999' },
-  badge:    { backgroundColor: LIGHT_TEAL, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3 },
-  badgeText:{ fontSize: 11, fontWeight: '700', color: TEAL_TEXT, letterSpacing: 0.5 },
-  amount:   { fontSize: 15, fontWeight: '700', color: '#111', textAlign: 'right' },
-  subAmount:{ fontSize: 13, color: '#999', textAlign: 'right', marginTop: 3 },
+  row:           { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingVertical: 18, borderBottomWidth: 1, borderBottomColor: '#EBEBEB' },
+  name:          { fontSize: 17, fontWeight: '800', color: '#111827', marginBottom: 6 },
+  meta:          { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  date:          { fontSize: 13, color: '#9CA3AF' },
+  badge:         { backgroundColor: LIGHT_TEAL, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 4 },
+  badgeText:     { fontSize: 11, fontWeight: '700', color: TEAL_TEXT, letterSpacing: 0.6 },
+  badgePending:  { backgroundColor: '#FEF9C3', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 4 },
+  badgePendingText: { fontSize: 11, fontWeight: '700', color: '#92400E', letterSpacing: 0.6 },
+  amount:        { fontSize: 16, fontWeight: '800', color: '#111827', textAlign: 'right' },
+  subAmount:     { fontSize: 13, color: '#9CA3AF', textAlign: 'right', marginTop: 4 },
 })
 
 // ── Confirmation sheet helper ─────────────────────────────────────────────────
-function ConfirmRow({ label, children }) {
+function BreakRow({ label, value, last, valueStyle }) {
   return (
-    <View style={cs.row}>
-      <Text style={cs.label}>{label}</Text>
-      <View style={cs.valueWrap}>{children}</View>
+    <View style={[cs.breakRow, !last && cs.breakRowBorder]}>
+      <Text style={cs.breakLabel}>{label}</Text>
+      <Text style={[cs.breakValue, valueStyle]} numberOfLines={1}>{value}</Text>
     </View>
   )
 }
 
 const cs = StyleSheet.create({
-  overlay:   { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.45)' },
-  sheet:     {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    paddingHorizontal: 24, paddingTop: 20,
-    maxHeight: '92%',
+  // ── Overlay & sheet ───────────────────────────────────────────────────────────
+  overlay:    { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.55)' },
+  sheet:      { backgroundColor: '#F4F6F9', borderTopLeftRadius: 28, borderTopRightRadius: 28, maxHeight: '95%' },
+  handle:     { width: 40, height: 4, borderRadius: 2, backgroundColor: '#D1D5DB', alignSelf: 'center', marginTop: 10 },
+
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 14, paddingBottom: 10 },
+  sheetTitle:  { fontSize: 17, fontWeight: '700', color: '#111827' },
+  closeCircle: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  closeX:      { fontSize: 15, color: '#374151', fontWeight: '700', lineHeight: 18 },
+
+  // ── Hero card ─────────────────────────────────────────────────────────────────
+  heroCard: {
+    backgroundColor: '#0A1628',
+    marginHorizontal: 16, borderRadius: 20,
+    padding: 22, marginBottom: 10,
+    shadowColor: '#0A1628', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.35, shadowRadius: 16, elevation: 10,
   },
+  heroLabel:        { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 6 },
+  heroAmount:       { fontSize: 38, fontWeight: '800', color: '#fff', letterSpacing: -0.5 },
+  heroCcy:          { fontSize: 22, fontWeight: '500', color: 'rgba(255,255,255,0.6)' },
+  heroConvertRow:   { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
+  heroArrow:        { fontSize: 15, color: '#F5C842', fontWeight: '700' },
+  heroConverted:    { fontSize: 16, fontWeight: '700', color: '#F5C842' },
+  heroDivider:      { height: 1, backgroundColor: 'rgba(255,255,255,0.1)', marginVertical: 16 },
+  heroRecipientRow: { flexDirection: 'row', alignItems: 'center' },
+  heroName:         { fontSize: 16, fontWeight: '700', color: '#fff' },
+  heroSub:          { fontSize: 12, color: 'rgba(255,255,255,0.45)', marginTop: 3 },
 
-  closeBtn:  { alignSelf: 'flex-end', padding: 6, marginBottom: 12 },
-  closeX:    { fontSize: 20, color: '#333', fontWeight: '600' },
+  // ── Breakdown card ────────────────────────────────────────────────────────────
+  breakCard:      { backgroundColor: '#fff', marginHorizontal: 16, borderRadius: 16, marginBottom: 4, overflow: 'hidden' },
+  breakRow:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 13 },
+  breakRowBorder: { borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  breakLabel:     { fontSize: 13, color: '#6B7280', fontWeight: '500' },
+  breakValue:     { fontSize: 14, fontWeight: '600', color: '#111827', flex: 1, textAlign: 'right', marginLeft: 12 },
+  receiveNote:    { fontSize: 11, color: '#9CA3AF', marginHorizontal: 20, marginTop: 6, marginBottom: 10, lineHeight: 16 },
 
-  row:       {
-    flexDirection: 'row', alignItems: 'flex-start',
-    paddingVertical: 18,
-    borderBottomWidth: 1, borderBottomColor: '#ECECEC',
+  // ── Pay with block ────────────────────────────────────────────────────────────
+  payBlock: {
+    backgroundColor: '#fff', marginHorizontal: 16, borderRadius: 16,
+    padding: 16, marginBottom: 10,
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 1.5, borderColor: '#E5E7EB',
   },
-  label:     { width: 110, fontSize: 14, color: '#888', lineHeight: 20 },
-  valueWrap: { flex: 1 },
-  valueMain: { fontSize: 18, fontWeight: '600', color: '#111' },
-  valueSub:  { fontSize: 13, color: '#888', marginTop: 2 },
-  valueNote: { fontSize: 12, color: '#999', marginTop: 6, lineHeight: 17 },
+  payBlockUnchosen: { borderColor: '#F5C842', borderStyle: 'dashed' },
+  payBlockLabel:    { fontSize: 10, fontWeight: '800', color: '#9CA3AF', letterSpacing: 1.2, textTransform: 'uppercase' },
+  payBlockValue:    { fontSize: 15, fontWeight: '700', color: '#111827' },
+  payBlockSub:      { fontSize: 12, color: '#9CA3AF', marginTop: 1 },
+  payBlockPlaceholder: { fontSize: 14, color: '#9CA3AF', marginTop: 5 },
+  payBlockChevron:  { fontSize: 26, color: '#9CA3AF', marginLeft: 8 },
 
-  walletBadge:     { width: 36, height: 24, backgroundColor: '#1A1F71', borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
-  walletBadgeText: { color: '#fff', fontWeight: '800', fontSize: 13 },
+  // ── Total block ───────────────────────────────────────────────────────────────
+  totalBlock: {
+    backgroundColor: '#fff', marginHorizontal: 16, borderRadius: 16,
+    paddingHorizontal: 16, paddingVertical: 14,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    marginBottom: 12,
+  },
+  totalLabel: { fontSize: 15, fontWeight: '600', color: '#374151' },
+  totalValue: { fontSize: 20, fontWeight: '800', color: '#111827' },
 
-  fraudBox:  { backgroundColor: '#F2F0EC', borderRadius: 10, padding: 16, marginTop: 20, marginBottom: 16 },
-  fraudText: { fontSize: 13, color: '#555', lineHeight: 20 },
+  // ── Disclaimer ────────────────────────────────────────────────────────────────
+  disclaimerText: { fontSize: 11, color: '#9CA3AF', lineHeight: 17, textAlign: 'center', marginHorizontal: 20, marginBottom: 14 },
 
-  confirmBtn:     { backgroundColor: '#F5C842', borderRadius: 32, paddingVertical: 18, alignItems: 'center', marginTop: 8 },
-  confirmBtnText: { fontSize: 18, fontWeight: '700', color: '#5A4500' },
+  // ── Wallet badge ──────────────────────────────────────────────────────────────
+  walletBadge:     { width: 38, height: 26, backgroundColor: '#1A1F71', borderRadius: 5, alignItems: 'center', justifyContent: 'center' },
+  walletBadgeText: { color: '#fff', fontWeight: '800', fontSize: 12 },
 
+  // ── Confirm button ────────────────────────────────────────────────────────────
+  confirmBtn:             { backgroundColor: '#F5C842', borderRadius: 32, paddingVertical: 18, alignItems: 'center', marginHorizontal: 16, marginTop: 4, marginBottom: 4 },
+  confirmBtnDisabled:     { backgroundColor: '#E5E7EB' },
+  confirmBtnText:         { fontSize: 17, fontWeight: '700', color: '#5A4500' },
+  confirmBtnTextDisabled: { color: '#9CA3AF', fontWeight: '600' },
+
+  // ── Payment picker overlay ────────────────────────────────────────────────────
   pickerOverlay:  {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
     backgroundColor: 'rgba(0,0,0,0.4)',
     justifyContent: 'flex-end',
-    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    borderTopLeftRadius: 28, borderTopRightRadius: 28,
     overflow: 'hidden',
   },
-  pickerSheet:    {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    paddingHorizontal: 24, paddingTop: 20,
-  },
+  pickerSheet:    { backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 24, paddingTop: 20 },
   pickerHeader:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   pickerTitle:    { fontSize: 18, fontWeight: '700', color: '#111' },
-  pickerRow:      {
-    flexDirection: 'row', alignItems: 'center', gap: 14,
-    paddingVertical: 14, paddingHorizontal: 12,
-    borderRadius: 14, marginBottom: 8,
-    backgroundColor: '#F9FAFB',
-  },
+  pickerCloseBtn: { padding: 4 },
+  pickerSection:  { fontSize: 11, fontWeight: '700', color: '#9CA3AF', letterSpacing: 1, textTransform: 'uppercase', marginTop: 12, marginBottom: 6, marginLeft: 2 },
+  pickerRow:      { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, paddingHorizontal: 12, borderRadius: 14, marginBottom: 8, backgroundColor: '#F9FAFB' },
   pickerRowSelected: { backgroundColor: '#FFF9E6', borderWidth: 1.5, borderColor: '#F5C842' },
+  pickerAddRow:   { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, paddingHorizontal: 12, borderRadius: 14, marginBottom: 8, backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderStyle: 'dashed' },
+  pickerAddChevron: { fontSize: 20, color: '#9CA3AF' },
   pickerLabel:    { fontSize: 15, fontWeight: '600', color: '#111' },
   pickerSub:      { fontSize: 13, color: '#888', marginTop: 2 },
-  pickerEmpty:    { fontSize: 14, color: '#9CA3AF', textAlign: 'center', paddingVertical: 24 },
   selectedDot:    { width: 10, height: 10, borderRadius: 5, backgroundColor: '#F5C842' },
+})
+
+// ── Insufficient balance modal styles ─────────────────────────────────────────
+const ib = StyleSheet.create({
+  sheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 28, borderTopRightRadius: 28,
+    paddingHorizontal: 24, paddingTop: 20,
+  },
+  header: {
+    flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 20,
+  },
+  warningIcon: {
+    width: 48, height: 48, borderRadius: 16,
+    backgroundColor: '#FEF2F2',
+    alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0,
+  },
+  title:  { fontSize: 18, fontWeight: '800', color: '#111' },
+  sub:    { fontSize: 13, color: '#9CA3AF', marginTop: 2 },
+
+  breakdownCard: {
+    backgroundColor: '#FEF2F2', borderRadius: 16,
+    paddingHorizontal: 16, marginBottom: 20,
+  },
+  breakdownRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: 'rgba(239,68,68,0.1)',
+  },
+  breakdownLabel: { fontSize: 14, color: '#6B7280' },
+  breakdownValue: { fontSize: 14, fontWeight: '600', color: '#111' },
+
+  section:      { marginBottom: 16 },
+  sectionTitle: { fontSize: 12, fontWeight: '700', color: '#9CA3AF', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 10 },
+
+  methodRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    paddingVertical: 12, paddingHorizontal: 14,
+    backgroundColor: '#F9FAFB', borderRadius: 14, marginBottom: 8,
+  },
+  methodLabel: { fontSize: 14, fontWeight: '600', color: '#111' },
+  methodSub:   { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
+
+  addFundsBtn: {
+    backgroundColor: TEAL,
+    borderRadius: 28, paddingVertical: 16, paddingHorizontal: 20,
+    alignItems: 'center', marginBottom: 10,
+  },
+  addFundsBtnText: { fontSize: 16, fontWeight: '700', color: '#fff', marginBottom: 2 },
+  addFundsBtnSub:  { fontSize: 12, color: 'rgba(255,255,255,0.75)' },
+
+  cancelBtn:     { paddingVertical: 14, alignItems: 'center' },
+  cancelBtnText: { fontSize: 15, fontWeight: '600', color: '#9CA3AF' },
 })
