@@ -41,7 +41,33 @@ const CURRENCY_SYMBOLS = {
   USD: '$', EUR: '€', GBP: '£', CAD: 'C$', CHF: 'Fr',
   XOF: 'XOF', XAF: 'XAF', NGN: '₦', GHS: '₵', KES: 'KSh',
   MAD: 'MAD', ZAR: 'R', EGP: '£E', GNF: 'GNF', ETB: 'Br', GMD: 'D',
+  SEK: 'kr', NOK: 'kr', DKK: 'kr', AUD: 'A$', NZD: 'NZ$',
 }
+
+// ISO 3166-1 alpha-2 region → ISO 4217 currency for sender countries
+const REGION_CURRENCY = {
+  US: 'USD', CA: 'CAD', GB: 'GBP', CH: 'CHF',
+  FR: 'EUR', DE: 'EUR', ES: 'EUR', IT: 'EUR', PT: 'EUR',
+  BE: 'EUR', NL: 'EUR', AT: 'EUR', FI: 'EUR', IE: 'EUR',
+  LU: 'EUR', MT: 'EUR', SK: 'EUR', SI: 'EUR', EE: 'EUR',
+  LV: 'EUR', LT: 'EUR', CY: 'EUR', GR: 'EUR',
+  SE: 'SEK', NO: 'NOK', DK: 'DKK',
+  AU: 'AUD', NZ: 'NZD',
+}
+
+function getDeviceCurrency() {
+  try {
+    const locale = Intl.DateTimeFormat().resolvedOptions().locale // e.g. "en-US", "fr-FR"
+    const parts = locale.split('-')
+    // Region tag is always the last BCP-47 subtag that is 2 uppercase letters
+    const region = parts.reverse().find(p => /^[A-Z]{2}$/.test(p))
+    return region ? (REGION_CURRENCY[region] || null) : null
+  } catch {
+    return null
+  }
+}
+
+const DEVICE_CURRENCY = getDeviceCurrency()
 
 const FEE_RATE = 0.015
 
@@ -248,7 +274,7 @@ export default function SendMoneyScreen() {
   const [showPayPicker, setShowPayPicker]         = useState(false)
   const [showInsufficientModal, setShowInsufficientModal] = useState(false)
 
-  const senderCcy    = wallet?.currency || 'USD'
+  const senderCcy    = DEVICE_CURRENCY || user?.home_currency || wallet?.currency || 'USD'
   const destCcy      = destCountry.currency
   const sendAmt      = parseFloat(amount) || 0
   const fee          = parseFloat((sendAmt * FEE_RATE).toFixed(2))

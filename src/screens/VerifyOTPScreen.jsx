@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity,
   StyleSheet, KeyboardAvoidingView, Platform, ScrollView,
@@ -10,6 +10,8 @@ import { ShieldCheck } from 'lucide-react-native'
 import api from '../api/client'
 import Spinner from '../components/Spinner'
 
+const RESEND_COOLDOWN = 60
+
 export default function VerifyOTPScreen() {
   const insets = useSafeAreaInsets()
   const navigation = useNavigation()
@@ -17,15 +19,27 @@ export default function VerifyOTPScreen() {
   const params = route.params || {}
   const [digits, setDigits] = useState(['', '', '', '', '', ''])
   const [loading, setLoading] = useState(false)
+  const [resending, setResending] = useState(false)
+  const [cooldown, setCooldown] = useState(RESEND_COOLDOWN)
   const inputs = useRef([])
+  const timerRef = useRef(null)
 
   useEffect(() => {
     if (!params.phone_number) navigation.navigate('Register')
-    if (params.otp) {
-      const otp = String(params.otp).split('').slice(0, 6)
-      setDigits([...otp, ...Array(6 - otp.length).fill('')])
-    }
     setTimeout(() => inputs.current[0]?.focus(), 300)
+    startCooldown()
+    return () => clearInterval(timerRef.current)
+  }, [])
+
+  const startCooldown = useCallback(() => {
+    setCooldown(RESEND_COOLDOWN)
+    clearInterval(timerRef.current)
+    timerRef.current = setInterval(() => {
+      setCooldown(prev => {
+        if (prev <= 1) { clearInterval(timerRef.current); return 0 }
+        return prev - 1
+      })
+    }, 1000)
   }, [])
 
   const handleDigit = (i, val) => {
@@ -51,7 +65,7 @@ export default function VerifyOTPScreen() {
         phone_number: params.phone_number,
         code,
         user_type:     params.user_type     || 'receiver',
-        home_currency: params.home_currency || 'XOF',
+        home_currency: params.home_currency || 'USD',
         full_name:     params.full_name     || '',
         home_country:  params.home_country  || '',
       })
@@ -71,6 +85,26 @@ export default function VerifyOTPScreen() {
       Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Invalid OTP' })
     } finally {
       setLoading(false)
+    }
+  }
+
+  const resend = async () => {
+    if (cooldown > 0 || resending) return
+    setResending(true)
+    setDigits(['', '', '', '', '', ''])
+    try {
+      await api.post('/auth/register', {
+        phone_number: params.phone_number,
+        country_code: params.country_code || '',
+        full_name:    params.full_name    || '',
+      })
+      Toast.show({ type: 'success', text1: 'New code sent!' })
+      startCooldown()
+      setTimeout(() => inputs.current[0]?.focus(), 300)
+    } catch (err) {
+      Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Could not resend code' })
+    } finally {
+      setResending(false)
     }
   }
 
@@ -106,22 +140,38 @@ export default function VerifyOTPScreen() {
         <TouchableOpacity style={[s.btn, loading && s.btnDisabled]} onPress={submit} disabled={loading}>
           {loading ? <Spinner size="sm" color="#fff" /> : <Text style={s.btnText}>Verify</Text>}
         </TouchableOpacity>
+
+        <View style={s.resendWrap}>
+          {resending ? (
+            <Spinner size="sm" color="#4F46E5" />
+          ) : cooldown > 0 ? (
+            <Text style={s.cooldownText}>Resend code in {cooldown}s</Text>
+          ) : (
+            <TouchableOpacity onPress={resend}>
+              <Text style={s.resendText}>Didn't receive a code? <Text style={s.resendLink}>Resend</Text></Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   )
 }
 
 const s = StyleSheet.create({
-  container:   { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24 },
-  iconWrap:    { alignItems: 'center', marginBottom: 40 },
-  iconBox:     { width: 64, height: 64, backgroundColor: '#22C55E', borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
-  title:       { fontSize: 24, fontWeight: '700', color: '#111827' },
-  sub:         { fontSize: 14, color: '#6B7280', marginTop: 4, textAlign: 'center' },
-  phone:       { fontSize: 15, fontWeight: '700', color: '#374151', marginTop: 4 },
-  otpRow:      { flexDirection: 'row', justifyContent: 'center', gap: 10, marginBottom: 32 },
-  otpBox:      { width: 48, height: 56, borderWidth: 2, borderColor: '#E5E7EB', borderRadius: 14, fontSize: 22, fontWeight: '700', color: '#111827', backgroundColor: '#fff' },
-  otpBoxFilled:{ borderColor: '#4F46E5' },
-  btn:         { backgroundColor: '#4F46E5', borderRadius: 14, paddingVertical: 15, alignItems: 'center' },
-  btnDisabled: { opacity: 0.7 },
-  btnText:     { color: '#fff', fontSize: 16, fontWeight: '700' },
+  container:    { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24 },
+  iconWrap:     { alignItems: 'center', marginBottom: 40 },
+  iconBox:      { width: 64, height: 64, backgroundColor: '#22C55E', borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  title:        { fontSize: 24, fontWeight: '700', color: '#111827' },
+  sub:          { fontSize: 14, color: '#6B7280', marginTop: 4, textAlign: 'center' },
+  phone:        { fontSize: 15, fontWeight: '700', color: '#374151', marginTop: 4 },
+  otpRow:       { flexDirection: 'row', justifyContent: 'center', gap: 10, marginBottom: 32 },
+  otpBox:       { width: 48, height: 56, borderWidth: 2, borderColor: '#E5E7EB', borderRadius: 14, fontSize: 22, fontWeight: '700', color: '#111827', backgroundColor: '#fff' },
+  otpBoxFilled: { borderColor: '#4F46E5' },
+  btn:          { backgroundColor: '#4F46E5', borderRadius: 14, paddingVertical: 15, alignItems: 'center' },
+  btnDisabled:  { opacity: 0.7 },
+  btnText:      { color: '#fff', fontSize: 16, fontWeight: '700' },
+  resendWrap:   { alignItems: 'center', marginTop: 24, minHeight: 24 },
+  cooldownText: { fontSize: 14, color: '#9CA3AF' },
+  resendText:   { fontSize: 14, color: '#6B7280' },
+  resendLink:   { color: '#4F46E5', fontWeight: '700' },
 })

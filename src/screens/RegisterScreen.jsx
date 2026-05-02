@@ -55,6 +55,27 @@ const CURRENCY_SYMBOLS = {
   MAD: 'MAD', ZAR: 'R', EGP: '£E', SEK: 'kr', NOK: 'kr',
 }
 
+const REGION_CURRENCY = {
+  US: 'USD', CA: 'CAD', GB: 'GBP', CH: 'CHF',
+  FR: 'EUR', DE: 'EUR', ES: 'EUR', IT: 'EUR', PT: 'EUR',
+  BE: 'EUR', NL: 'EUR', AT: 'EUR', FI: 'EUR', IE: 'EUR',
+  LU: 'EUR', SE: 'SEK', NO: 'NOK',
+}
+
+function getDeviceCountry(countryList) {
+  try {
+    const locale = Intl.DateTimeFormat().resolvedOptions().locale
+    const parts = locale.split('-')
+    const region = parts.reverse().find(p => /^[A-Z]{2}$/.test(p))
+    if (!region) return null
+    const currency = REGION_CURRENCY[region]
+    if (!currency) return null
+    return countryList.find(c => c.currency === currency) || null
+  } catch {
+    return null
+  }
+}
+
 export default function RegisterScreen() {
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
@@ -73,7 +94,7 @@ export default function RegisterScreen() {
     setLoading(true)
     try {
       const phone = (selectedCountry.dial + phoneNumber).replace(/\s/g, '')
-      const { data } = await api.post('/auth/register', {
+      await api.post('/auth/register', {
         phone_number: phone,
         country_code: selectedCountry.dial,
         full_name: fullName,
@@ -81,7 +102,7 @@ export default function RegisterScreen() {
       Toast.show({ type: 'success', text1: 'OTP sent!' })
       navigation.navigate('VerifyOTP', {
         phone_number: phone,
-        otp: data.otp,
+        country_code: selectedCountry.dial,
         full_name: fullName,
         user_type: userType,
         home_currency: selectedCountry.currency,
@@ -113,7 +134,12 @@ export default function RegisterScreen() {
 
         <TouchableOpacity
           style={s.roleCard}
-          onPress={() => { setUserType('sender'); setStep(1) }}
+          onPress={() => {
+            setUserType('sender')
+            const detected = getDeviceCountry(SENDER_COUNTRIES)
+            if (detected) setSelectedCountry(detected)
+            setStep(1)
+          }}
           activeOpacity={0.85}
         >
           <View style={[s.roleIconWrap, { backgroundColor: '#EEF2FF' }]}>
