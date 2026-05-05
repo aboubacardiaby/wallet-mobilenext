@@ -24,13 +24,6 @@ export default function VerifyOTPScreen() {
   const inputs = useRef([])
   const timerRef = useRef(null)
 
-  useEffect(() => {
-    if (!params.phone_number) navigation.navigate('Register')
-    setTimeout(() => inputs.current[0]?.focus(), 300)
-    startCooldown()
-    return () => clearInterval(timerRef.current)
-  }, [])
-
   const startCooldown = useCallback(() => {
     setCooldown(RESEND_COOLDOWN)
     clearInterval(timerRef.current)
@@ -42,12 +35,24 @@ export default function VerifyOTPScreen() {
     }, 1000)
   }, [])
 
+  useEffect(() => {
+    if (!params.phone_number) return navigation.navigate('Register')
+    setTimeout(() => inputs.current[0]?.focus(), 300)
+    startCooldown()
+    return () => clearInterval(timerRef.current)
+  }, [startCooldown])
+
   const handleDigit = (i, val) => {
     if (!/^\d?$/.test(val)) return
     const next = [...digits]
     next[i] = val
     setDigits(next)
-    if (val && i < 5) inputs.current[i + 1]?.focus()
+    if (val && i < 5) {
+      inputs.current[i + 1]?.focus()
+    } else if (val && i === 5) {
+      inputs.current[5]?.blur()
+      submit(next.join(''))
+    }
   }
 
   const handleKey = (i, e) => {
@@ -56,8 +61,8 @@ export default function VerifyOTPScreen() {
     }
   }
 
-  const submit = async () => {
-    const code = digits.join('')
+  const submit = async (overrideCode) => {
+    const code = overrideCode ?? digits.join('')
     if (code.length < 6) return Toast.show({ type: 'error', text1: 'Enter the 6-digit code' })
     setLoading(true)
     try {
