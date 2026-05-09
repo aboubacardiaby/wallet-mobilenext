@@ -3,7 +3,7 @@ import axios from 'axios'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 
 const api = axios.create({
-  baseURL: process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8080/api/v1',
+  baseURL: process.env.EXPO_PUBLIC_API_URL || 'https://kalipeh-wallet-525776555218.us-central1.run.app/api/v1',
   headers: { 'Content-Type': 'application/json' },
 })
 

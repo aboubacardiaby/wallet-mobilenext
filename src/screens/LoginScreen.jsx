@@ -15,15 +15,18 @@ export default function LoginScreen() {
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
   const { saveSession } = useAuth()
+  const [dialCode, setDialCode] = useState('')
   const [phone, setPhone] = useState('')
   const [pin, setPin] = useState('')
   const [loading, setLoading] = useState(false)
 
   const submit = async () => {
     if (!phone || !pin) return Toast.show({ type: 'error', text1: 'Fill in all fields' })
+    if (!dialCode.startsWith('+')) return Toast.show({ type: 'error', text1: 'Enter a valid dial code (e.g. +221)' })
     setLoading(true)
+    const fullPhone = (dialCode + phone).replace(/\s/g, '')
     try {
-      const { data } = await api.post('/auth/login', { phone_number: phone, pin })
+      const { data } = await api.post('/auth/login', { phone_number: fullPhone, pin: String(pin) })
       await saveSession(data.token, data.user)
       Toast.show({ type: 'success', text1: 'Welcome back!' })
     } catch (err) {
@@ -52,15 +55,26 @@ export default function LoginScreen() {
         {/* Form card */}
         <View style={s.card}>
           <Text style={s.label}>Phone Number</Text>
-          <TextInput
-            style={s.input}
-            placeholder="+221 700 000 000"
-            placeholderTextColor="#9CA3AF"
-            keyboardType="phone-pad"
-            value={phone}
-            onChangeText={setPhone}
-            autoCorrect={false}
-          />
+          <View style={s.phoneRow}>
+            <TextInput
+              style={[s.input, s.dialInput]}
+              value={dialCode}
+              onChangeText={v => setDialCode(v.startsWith('+') ? v : '+' + v.replace(/\D/g, ''))}
+              keyboardType="phone-pad"
+              maxLength={5}
+              placeholder="+221"
+              placeholderTextColor="#9CA3AF"
+            />
+            <TextInput
+              style={[s.input, s.phoneInput]}
+              placeholder="700 000 000"
+              placeholderTextColor="#9CA3AF"
+              keyboardType="phone-pad"
+              value={phone}
+              onChangeText={setPhone}
+              autoCorrect={false}
+            />
+          </View>
 
           <Text style={[s.label, { marginTop: 18 }]}>PIN</Text>
           <TextInput
@@ -96,6 +110,9 @@ const s = StyleSheet.create({
   card:        { backgroundColor: '#fff', borderRadius: 24, padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 12, elevation: 3, marginBottom: 20 },
   label:       { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 8 },
   input:       { backgroundColor: '#F9FAFB', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14, fontSize: 15, color: '#111827' },
+  phoneRow:    { flexDirection: 'row', gap: 8 },
+  dialInput:   { width: 72, textAlign: 'center' },
+  phoneInput:  { flex: 1 },
   pinInput:    { textAlign: 'center', fontSize: 24, letterSpacing: 10 },
   btn:         { backgroundColor: '#4F46E5', borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 24, shadowColor: '#4F46E5', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 5 },
   btnDisabled: { opacity: 0.7 },

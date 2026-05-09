@@ -1,4 +1,4 @@
-package com.kalipeh.wallet
+package com.kalipeh.mobile
 
 import android.os.Build
 import android.os.Bundle

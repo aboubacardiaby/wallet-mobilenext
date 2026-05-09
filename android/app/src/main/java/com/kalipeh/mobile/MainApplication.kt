@@ -1,4 +1,4 @@
-package com.kalipeh.wallet
+package com.kalipeh.mobile
 
 import android.app.Application
 import android.content.res.Configuration
