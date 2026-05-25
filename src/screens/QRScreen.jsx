@@ -26,7 +26,7 @@ export default function QRScreen() {
   const generate = async () => {
     setLoading(true)
     try {
-      const { data } = await api.post('/qr/generate', { amount: parseFloat(amount) || 0 })
+      const { data } = await api.post('qr/generate', { amount: parseFloat(amount) || 0 })
       setQrPayload(data.payload)
     } catch { Toast.show({ type: 'error', text1: 'Failed to generate QR' }) }
     finally { setLoading(false) }
@@ -36,7 +36,7 @@ export default function QRScreen() {
     if (!scanData.trim()) return Toast.show({ type: 'error', text1: 'Paste QR data first' })
     setLoading(true)
     try {
-      const { data } = await api.post('/qr/scan', { qr_data: scanData })
+      const { data } = await api.post('qr/scan', { qr_data: scanData })
       setScanResult(data)
     } catch { Toast.show({ type: 'error', text1: 'Invalid QR data' }) }
     finally { setLoading(false) }

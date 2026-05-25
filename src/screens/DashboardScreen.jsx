@@ -54,7 +54,7 @@ export default function DashboardScreen() {
 
   const fetchWallet = async () => {
     try {
-      const { data } = await api.get('/wallet/balance')
+      const { data } = await api.get('wallet/balance')
       setWallet(data)
     } catch { Toast.show({ type: 'error', text1: 'Could not load balance' }) }
     finally { setLoadingWallet(false) }
@@ -62,7 +62,7 @@ export default function DashboardScreen() {
 
   const fetchTxs = async () => {
     try {
-      const { data } = await api.get('/wallet/transactions?limit=5')
+      const { data } = await api.get('wallet/transactions?limit=5')
       setTxs(data.transactions)
     } catch { /* silent */ }
     finally { setLoadingTxs(false) }
@@ -70,7 +70,7 @@ export default function DashboardScreen() {
 
   const fetchTicker = async () => {
     try {
-      const { data } = await api.get('/exchange/rates?base=XOF&popular_only=true')
+      const { data } = await api.get('exchange/rates?base=XOF&popular_only=true')
       const picks = ['EUR', 'USD', 'GBP']
       setTicker(picks.map(code => ({ code, rate: data.rates[code] })).filter(x => x.rate))
     } catch { /* silent */ }

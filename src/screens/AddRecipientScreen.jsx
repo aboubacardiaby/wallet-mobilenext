@@ -87,7 +87,7 @@ export default function AddRecipientScreen() {
     try {
       let p = phone.replace(/[\s\-().]/g, '')
       if (!p.startsWith('+')) p = country.dial + p.replace(/^0+/, '')
-      await api.post('/user/recipients', {
+      await api.post('user/recipients', {
         phone_number:  p,
         full_name:     fullName || p,
         country_code:  country.code,

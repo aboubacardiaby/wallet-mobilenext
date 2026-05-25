@@ -66,7 +66,7 @@ export default function VerifyOTPScreen() {
     if (code.length < 6) return Toast.show({ type: 'error', text1: 'Enter the 6-digit code' })
     setLoading(true)
     try {
-      const { data } = await api.post('/auth/verify-otp', {
+      const { data } = await api.post('auth/verify-otp', {
         phone_number: params.phone_number,
         code,
         user_type:     params.user_type     || 'receiver',
@@ -98,7 +98,7 @@ export default function VerifyOTPScreen() {
     setResending(true)
     setDigits(['', '', '', '', '', ''])
     try {
-      await api.post('/auth/register', {
+      await api.post('auth/register', {
         phone_number: params.phone_number,
         country_code: params.country_code || '',
         full_name:    params.full_name    || '',

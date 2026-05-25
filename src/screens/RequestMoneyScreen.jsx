@@ -23,7 +23,7 @@ export default function RequestMoneyScreen() {
     if (!amount) return Toast.show({ type: 'error', text1: 'Enter an amount' })
     setLoading(true)
     try {
-      await api.post('/transfer/request', {
+      await api.post('transfer/request', {
         from_phone: fromPhone, amount: parseFloat(amount), description,
       })
       Toast.show({ type: 'success', text1: 'Request sent!' })

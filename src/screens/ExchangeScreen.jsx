@@ -62,7 +62,7 @@ export default function ExchangeScreen() {
   const loadRates = useCallback(async (silent = false) => {
     if (!silent) setLoading(true); else setRefreshing(true)
     try {
-      const { data } = await api.get('/exchange/rates?base=XOF&popular_only=true')
+      const { data } = await api.get('exchange/rates?base=XOF&popular_only=true')
       setRates(data.rates)
       setFetchedAt(data.fetched_at)
     } catch {

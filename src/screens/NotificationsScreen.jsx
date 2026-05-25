@@ -21,7 +21,7 @@ export default function NotificationsScreen() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    api.get('/notifications')
+    api.get('notifications')
       .then(({ data }) => setItems(data.notifications))
       .catch(() => Toast.show({ type: 'error', text1: 'Failed to load' }))
       .finally(() => setLoading(false))

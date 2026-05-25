@@ -25,7 +25,7 @@ export default function SetPINScreen() {
     if (pin !== confirmPin) return Toast.show({ type: 'error', text1: 'PINs do not match' })
     setLoading(true)
     try {
-      await api.post('/user/pin', { pin, confirm_pin: confirmPin }, {
+      await api.post('user/pin', { pin, confirm_pin: confirmPin }, {
         headers: { Authorization: `Bearer ${token}` },
       })
       Toast.show({ type: 'success', text1: 'PIN set successfully!' })

@@ -99,7 +99,7 @@ export default function RecipientsScreen() {
   const [pickedRecipient, setPickedRecipient] = useState(null)
 
   useEffect(() => {
-    api.get('/wallet/transactions?page=1&limit=100')
+    api.get('wallet/transactions?page=1&limit=100')
       .then(({ data }) => setRecipients(extractRecipients(data.transactions || [])))
       .catch(() => {})
       .finally(() => setLoading(false))

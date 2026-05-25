@@ -94,7 +94,7 @@ export default function RegisterScreen() {
     setLoading(true)
     try {
       const phone = (selectedCountry.dial + phoneNumber).replace(/\s/g, '')
-      await api.post('/auth/register', {
+      await api.post('auth/register', {
         phone_number: phone,
         country_code: selectedCountry.dial,
         full_name: fullName,

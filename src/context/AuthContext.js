@@ -38,7 +38,7 @@ export function AuthProvider({ children }) {
 
   const refreshProfile = useCallback(async () => {
     try {
-      const { data } = await api.get('/user/profile')
+      const { data } = await api.get('user/profile')
       const updated = data.user
       await AsyncStorage.setItem('user', JSON.stringify(updated))
       setUser(updated)

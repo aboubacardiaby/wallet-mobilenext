@@ -6,7 +6,18 @@
       "Bash(./gradlew bundleRelease)",
       "Bash(powershell *)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(npx expo *)",
+      "Bash(Get-ChildItem \"C:\\\\Users\\\\Lenovo\\\\AppData\\\\Local\\\\Android\" -ErrorAction SilentlyContinue)",
+      "Bash(Get-ChildItem \"C:\\\\Program Files\\\\Android\" -ErrorAction SilentlyContinue)",
+      "Bash(Get-ChildItem \"C:\\\\Android\" -ErrorAction SilentlyContinue)",
+      "PowerShell(ls \"C:\\\\Users\\\\Lenovo\\\\AppData\\\\Local\" | Where-Object { $_.Name -match \"Android|Google|SDK\" })",
+      "Bash(JAVA_HOME=\"C:/Program Files/Android/Android Studio/jbr\" npx expo run:android)",
+      "Bash(echo:*)",
+      "Bash(\"$LOCALAPPDATA/Android/Sdk/emulator/emulator.exe\" -list-avds)",
+      "Bash(\"$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe\":*)",
+      "Bash(./gradlew.bat:*)",
+      "Bash(\"C:\\\\Users\\\\Lenovo\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\emulator\\\\emulator.exe\" -avd Pixel_9_Pro)"
     ]
   }
 }

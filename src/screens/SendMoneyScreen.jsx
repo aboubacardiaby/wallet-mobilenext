@@ -91,7 +91,7 @@ async function notifySender(transferData) {
   // /notifications only supports GET — skip the in-app notification POST
   // Only call transfer-email if that endpoint exists on your backend
   try {
-    await api.post('/notifications/transfer-email', {
+    await api.post('notifications/transfer-email', {
       recipient_type:  'sender',
       transfer_type:   transferData.pickup_code ? 'cash_pickup' : transferData.wave_ref ? 'wave' : 'wallet',
       transaction_ref: transferData.transaction_ref,
@@ -109,7 +109,7 @@ async function notifySender(transferData) {
 
 async function notifyRecipient(transferData, toPhone) {
   try {
-    await api.post('/notifications/recipient-notify', {
+    await api.post('notifications/recipient-notify', {
       to_phone:        toPhone,
       transfer_type:   transferData.pickup_code ? 'cash_pickup' : transferData.wave_ref ? 'wave' : 'wallet',
       transaction_ref: transferData.transaction_ref,
@@ -226,7 +226,7 @@ async function sendReceipt(transferData, senderEmail, senderName) {
   try {
     // POST the full email content + SMTP credentials.
     // Backend only needs to open an SMTP connection and send — no templates needed.
-    await api.post('/email/send', {
+    await api.post('email/send', {
       smtp_config: smtpConfig,
       to:          senderEmail,
       subject,
@@ -243,6 +243,15 @@ function fmt(n, ccy) {
   if (n == null || isNaN(n)) return '—'
   const sym = CURRENCY_SYMBOLS[ccy] || ccy
   return `${sym} ${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+}
+
+function formatCardNumber(raw) {
+  return raw.replace(/\D/g, '').slice(0, 16).replace(/(.{4})/g, '$1 ').trim()
+}
+
+function formatExpiry(raw) {
+  const d = raw.replace(/\D/g, '').slice(0, 4)
+  return d.length > 2 ? `${d.slice(0, 2)}/${d.slice(2)}` : d
 }
 
 export default function SendMoneyScreen() {
@@ -273,6 +282,11 @@ export default function SendMoneyScreen() {
   const [paymentChosen, setPaymentChosen]         = useState(false)
   const [showPayPicker, setShowPayPicker]         = useState(false)
   const [showInsufficientModal, setShowInsufficientModal] = useState(false)
+  const [showCardEntry, setShowCardEntry]         = useState(false)
+  const [cardNumber, setCardNumber]               = useState('')
+  const [cardExpiry, setCardExpiry]               = useState('')
+  const [cardCvc, setCardCvc]                     = useState('')
+  const [cardHolderName, setCardHolderName]       = useState('')
 
   const senderCcy    = DEVICE_CURRENCY || user?.home_currency || wallet?.currency || 'USD'
   const destCcy      = destCountry.currency
@@ -319,20 +333,20 @@ export default function SendMoneyScreen() {
     if (!senderCcy || !destCcy) return
     if (senderCcy === destCcy) { setLiveRate(1.0); return }
     setRateLoading(true)
-    api.get(`/exchange/convert?from=${senderCcy}&to=${destCcy}&amount=1`)
+    api.get(`exchange/convert?from=${senderCcy}&to=${destCcy}&amount=1`)
       .then(({ data }) => setLiveRate(data.rate))
       .catch(() => setLiveRate(null))
       .finally(() => setRateLoading(false))
   }, [senderCcy, destCcy])
 
   useEffect(() => {
-    api.get('/wallet/balance').then(({ data }) => setWallet(data)).catch(() => {})
-    api.get('/wallet/transactions?page=1&limit=5').then(({ data }) => setTransactions(data.transactions || [])).catch(() => {})
-    api.get('/payment-methods').then(({ data }) => setPaymentMethods(data.payment_methods || [])).catch(() => {})
+    api.get('wallet/balance').then(({ data }) => setWallet(data)).catch(() => {})
+    api.get('wallet/transactions?page=1&limit=5').then(({ data }) => setTransactions(data.transactions || [])).catch(() => {})
+    api.get('payment-methods').then(({ data }) => setPaymentMethods(data.payment_methods || [])).catch(() => {})
   }, [])
 
   useFocusEffect(useCallback(() => {
-    api.get('/payment-methods').then(({ data }) => setPaymentMethods(data.payment_methods || [])).catch(() => {})
+    api.get('payment-methods').then(({ data }) => setPaymentMethods(data.payment_methods || [])).catch(() => {})
   }, []))
 
   const fetchQuote = useCallback(async (phone, amt, recvCcy) => {
@@ -340,7 +354,7 @@ export default function SendMoneyScreen() {
     setQuoteLoading(true)
     try {
       const { data } = await api.get(
-        `/transfer/quote?to_phone=${encodeURIComponent(phone)}&amount=${amt}&recv_currency=${recvCcy}`
+        `transfer/quote?to_phone=${encodeURIComponent(phone)}&amount=${amt}&recv_currency=${recvCcy}`
       )
       setQuote(data)
       if (data.recipient_found && data.exchange_rate) setLiveRate(data.exchange_rate)
@@ -385,12 +399,70 @@ export default function SendMoneyScreen() {
 
   // "Confirm transfer" — routes to the correct backend endpoint per delivery method
   const confirmTransfer = async () => {
+    // If card payment method is selected, show card entry modal first
+    if (selectedPayMethod?.type === 'card') {
+      setShowCardEntry(true)
+      return
+    }
+
+    await executeTransfer()
+  }
+
+  // Process card payment and then execute transfer
+  const processCardAndTransfer = async () => {
+    if (!cardNumber || !cardExpiry || !cardCvc) {
+      Toast.show({ type: 'error', text1: 'Please fill in all card details' })
+      return
+    }
+
+    const [mm, yy] = cardExpiry.split('/')
+    if (!mm || !yy) {
+      Toast.show({ type: 'error', text1: 'Invalid expiry date' })
+      return
+    }
+
+    setConfirming(true)
+    try {
+      // First, process the card payment to fund the wallet
+      await api.post('payment-methods/card/pay', {
+        card_number: cardNumber.replace(/\s/g, ''),
+        expiry_month: parseInt(mm, 10),
+        expiry_year: parseInt('20' + yy, 10),
+        cvc: cardCvc,
+        holder_name: cardHolderName || undefined,
+        amount: sendAmt,
+        description: `Transfer to ${toPhone}`,
+      })
+
+      // Close card entry modal
+      setShowCardEntry(false)
+      // Clear card details for security
+      setCardNumber('')
+      setCardExpiry('')
+      setCardCvc('')
+      setCardHolderName('')
+
+      // Now execute the transfer (wallet will have the funds)
+      await executeTransfer(true) // true = skip balance check, we just funded it
+    } catch (err) {
+      const msg =
+        err.response?.data?.detail ||
+        err.response?.data?.message ||
+        err.message ||
+        'Card payment failed. Please try again.'
+      Alert.alert('Card Payment Failed', String(msg))
+      setConfirming(false)
+    }
+  }
+
+  // Execute the actual transfer
+  const executeTransfer = async (skipBalanceCheck = false) => {
     setConfirming(true)
     try {
       // Wallet selected — pre-check balance (skip on network error, let backend validate)
-      if (selectedPayMethod === null) {
+      if (!skipBalanceCheck && selectedPayMethod === null) {
         try {
-          const { data: freshWallet } = await api.get('/wallet/balance')
+          const { data: freshWallet } = await api.get('wallet/balance')
           setWallet(freshWallet)
           if (parseFloat(freshWallet.balance) < sendAmt) {
             setShowInsufficientModal(true)
@@ -403,43 +475,38 @@ export default function SendMoneyScreen() {
       }
 
       let responseData
-      const payMethodId = selectedPayMethod?.id || null
-
       const resolvedRecipientName = quote?.recipient_name || recipientName.trim() || null
 
       if (delivery === 'wave') {
-        const { data } = await api.post('/transfer/wave', {
+        const { data } = await api.post('transfer/wave', {
           to_phone:       toPhone,
           amount:         sendAmt,
           recv_currency:  destCcy,
           description,
           recipient_name: resolvedRecipientName,
-          ...(payMethodId && { payment_method_id: payMethodId }),
         })
         responseData = data
 
       } else if (delivery === 'cash') {
-        const agentsRes = await api.get(`/transfer/agents?country=${encodeURIComponent(destCountry.name)}`)
+        const agentsRes = await api.get(`transfer/agents?country=${encodeURIComponent(destCountry.name)}`)
         const agents = agentsRes.data?.agents || []
         if (!agents.length) throw new Error(`No cash pickup agents available in ${destCountry.name}`)
-        const { data } = await api.post('/transfer/cash-pickup', {
+        const { data } = await api.post('transfer/cash-pickup', {
           to_phone:       toPhone,
           recipient_name: resolvedRecipientName || toPhone,
           amount:         sendAmt,
           recv_currency:  destCcy,
           agent_id:       agents[0].id,
           description,
-          ...(payMethodId && { payment_method_id: payMethodId }),
         })
         responseData = data
 
       } else {
-        const { data } = await api.post('/transfer/send', {
+        const { data } = await api.post('transfer/send', {
           to_phone:      toPhone,
           amount:        sendAmt,
           recv_currency: destCcy,
           description,
-          ...(payMethodId && { payment_method_id: payMethodId }),
         })
         responseData = data
       }
@@ -1115,6 +1182,105 @@ export default function SendMoneyScreen() {
         </View>
       </Modal>
 
+      {/* ── Card entry modal ── */}
+      <Modal
+        visible={showCardEntry}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowCardEntry(false)}
+      >
+        <View style={cs.overlay}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowCardEntry(false)} />
+          <View style={[ce.sheet, { paddingBottom: insets.bottom + 24 }]}>
+
+            {/* Header */}
+            <View style={ce.header}>
+              <View style={ce.cardIcon}>
+                <Text style={{ fontSize: 24 }}>💳</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={ce.title}>Enter Card Details</Text>
+                <Text style={ce.sub}>Amount: {fmt(sendAmt, senderCcy)}</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowCardEntry(false)} style={cs.closeCircle} activeOpacity={0.7}>
+                <Text style={cs.closeX}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Card number */}
+            <Text style={ce.label}>Card Number</Text>
+            <TextInput
+              style={ce.input}
+              placeholder="1234 5678 9012 3456"
+              placeholderTextColor="#9CA3AF"
+              keyboardType="number-pad"
+              maxLength={19}
+              value={cardNumber}
+              onChangeText={v => setCardNumber(formatCardNumber(v))}
+            />
+
+            {/* Expiry + CVC row */}
+            <View style={ce.row}>
+              <View style={{ flex: 1 }}>
+                <Text style={ce.label}>Expiry</Text>
+                <TextInput
+                  style={ce.input}
+                  placeholder="MM/YY"
+                  placeholderTextColor="#9CA3AF"
+                  keyboardType="number-pad"
+                  maxLength={5}
+                  value={cardExpiry}
+                  onChangeText={v => setCardExpiry(formatExpiry(v))}
+                />
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={ce.label}>CVC</Text>
+                <TextInput
+                  style={ce.input}
+                  placeholder="123"
+                  placeholderTextColor="#9CA3AF"
+                  keyboardType="number-pad"
+                  maxLength={4}
+                  secureTextEntry
+                  value={cardCvc}
+                  onChangeText={v => setCardCvc(v.replace(/\D/g, '').slice(0, 4))}
+                />
+              </View>
+            </View>
+
+            {/* Cardholder name */}
+            <Text style={ce.label}>Cardholder Name (optional)</Text>
+            <TextInput
+              style={ce.input}
+              placeholder="John Doe"
+              placeholderTextColor="#9CA3AF"
+              value={cardHolderName}
+              onChangeText={setCardHolderName}
+            />
+
+            {/* Pay button */}
+            <TouchableOpacity
+              style={[ce.payBtn, confirming && ce.payBtnDisabled]}
+              onPress={processCardAndTransfer}
+              disabled={confirming}
+              activeOpacity={0.85}
+            >
+              {confirming
+                ? <Spinner size="sm" color="#fff" />
+                : <Text style={ce.payBtnText}>Pay {fmt(sendAmt, senderCcy)} & Send</Text>
+              }
+            </TouchableOpacity>
+
+            {/* Security note */}
+            <View style={ce.securityNote}>
+              <Shield size={14} color="#9CA3AF" />
+              <Text style={ce.securityText}>Your card details are encrypted and securely processed</Text>
+            </View>
+
+          </View>
+        </View>
+      </Modal>
+
     </KeyboardAvoidingView>
   )
 }
@@ -1541,4 +1707,54 @@ const ib = StyleSheet.create({
 
   cancelBtn:     { paddingVertical: 14, alignItems: 'center' },
   cancelBtnText: { fontSize: 15, fontWeight: '600', color: '#9CA3AF' },
+})
+
+// ── Card entry modal styles ────────────────────────────────────────────────────
+const ce = StyleSheet.create({
+  sheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 28, borderTopRightRadius: 28,
+    paddingHorizontal: 24, paddingTop: 20,
+  },
+  header: {
+    flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 24,
+  },
+  cardIcon: {
+    width: 48, height: 48, borderRadius: 16,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0,
+  },
+  title: { fontSize: 18, fontWeight: '800', color: '#111' },
+  sub:   { fontSize: 13, color: '#9CA3AF', marginTop: 2 },
+
+  label: {
+    fontSize: 12, fontWeight: '600', color: '#6B7280',
+    marginBottom: 6, marginTop: 12,
+  },
+  input: {
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1.5, borderColor: '#E5E7EB',
+    borderRadius: 14,
+    paddingHorizontal: 16, paddingVertical: 14,
+    fontSize: 16, color: '#111',
+  },
+  row: {
+    flexDirection: 'row',
+  },
+
+  payBtn: {
+    backgroundColor: TEAL,
+    borderRadius: 28, paddingVertical: 16,
+    alignItems: 'center', marginTop: 24,
+    shadowColor: TEAL, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 4,
+  },
+  payBtnDisabled: { opacity: 0.7 },
+  payBtnText: { fontSize: 16, fontWeight: '700', color: '#fff' },
+
+  securityNote: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, marginTop: 16,
+  },
+  securityText: { fontSize: 12, color: '#9CA3AF' },
 })

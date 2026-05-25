@@ -59,7 +59,7 @@ export default function PaymentMethodsScreen() {
 
   const load = async () => {
     try {
-      const { data } = await api.get('/payment-methods')
+      const { data } = await api.get('payment-methods')
       setMethods(data.payment_methods || [])
     } catch { Toast.show({ type: 'error', text1: 'Failed to load payment methods' }) }
     finally { setLoading(false) }
@@ -193,7 +193,7 @@ function AddCardForm({ onDone }) {
     if (!mm || !yy) return Toast.show({ type: 'error', text1: 'Invalid expiry date' })
     setSaving(true)
     try {
-      await api.post('/payment-methods/card', {
+      await api.post('payment-methods/card/pay', {
         card_number: number.replace(/\s/g, ''),
         expiry_month: parseInt(mm, 10),
         expiry_year: parseInt('20' + yy, 10),
@@ -250,7 +250,7 @@ function AddACHForm({ onDone }) {
     if (accountNumber.length < 4)  return Alert.alert('Invalid Account Number', 'Please enter a valid account number (min 4 digits).')
     setSaving(true)
     try {
-      await api.post('/payment-methods/bank', {
+      await api.post('payment-methods/bank', {
         bank_name:      bankName.trim(),
         holder_name:    holderName.trim(),
         routing_number: routingNumber,
@@ -341,7 +341,7 @@ function AddPayPalForm({ onDone }) {
   const submit = async () => {
     setSaving(true)
     try {
-      await api.post('/payment-methods/paypal', { email, set_default: isDefault })
+      await api.post('payment-methods/paypal', { email, set_default: isDefault })
       Toast.show({ type: 'success', text1: 'PayPal added!' })
       onDone()
     } catch (err) {
@@ -370,7 +370,7 @@ function AddDigitalWalletForm({ type, onDone }) {
   const submit = async () => {
     setSaving(true)
     try {
-      await api.post('/payment-methods/digital-wallet', { type, set_default: isDefault })
+      await api.post('payment-methods/digital-wallet', { type, set_default: isDefault })
       Toast.show({ type: 'success', text1: `${label} added!` })
       onDone()
     } catch (err) {

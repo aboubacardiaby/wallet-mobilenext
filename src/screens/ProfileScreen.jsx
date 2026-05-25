@@ -47,7 +47,7 @@ export default function ProfileScreen() {
   const save = async () => {
     setLoading(true)
     try {
-      await api.put('/user/profile', { full_name: fullName, email })
+      await api.put('user/profile', { full_name: fullName, email })
       Toast.show({ type: 'success', text1: 'Profile updated!' })
       const p = await refreshProfile()
       if (p) setProfile(p)

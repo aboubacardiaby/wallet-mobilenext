@@ -53,7 +53,7 @@ export default function KYCScreen() {
   }, [user])
 
   useEffect(() => {
-    api.get('/kyc/status')
+    api.get('kyc/status')
       .then(({ data }) => setKycData(data))
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -64,7 +64,7 @@ export default function KYCScreen() {
   const submit = async () => {
     setSubmitting(true)
     try {
-      await api.post('/kyc/submit', form)
+      await api.post('kyc/submit', form)
       Toast.show({ type: 'success', text1: "KYC submitted! We'll review it shortly." })
       await refreshProfile()
       navigation.goBack()
