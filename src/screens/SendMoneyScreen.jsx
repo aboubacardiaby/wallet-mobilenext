@@ -6,7 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
 import Toast from 'react-native-toast-message'
-import { ChevronDown, UserPlus, CheckCircle, ArrowRight, Zap, Shield, Clock, Mail } from 'lucide-react-native'
+import { ChevronDown, UserPlus, CheckCircle, ArrowRight, Zap, Shield, Clock, Mail, Trash2, Plus } from 'lucide-react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
@@ -203,32 +203,14 @@ function buildReceiptHtml(transferData, senderName) {
 async function sendReceipt(transferData, senderEmail, senderName) {
   if (!senderEmail) return
 
-  // Load SMTP config saved by SmtpSettingsScreen → AsyncStorage
-  let smtpConfig = null
-  try {
-    const raw = await AsyncStorage.getItem('smtp_config')
-    if (raw) smtpConfig = JSON.parse(raw)
-  } catch { /* ignore */ }
-
-  if (!smtpConfig?.host || !smtpConfig?.username) {
-    Toast.show({
-      type: 'error',
-      text1: 'Receipt not sent — SMTP not configured',
-      text2: 'Go to Profile → Settings → Email (SMTP)',
-    })
-    return
-  }
-
   const subject = `Transfer Receipt — ${transferData.send_amount} ${transferData.send_currency} sent`
   const html    = buildReceiptHtml(transferData, senderName)
   const text    = `Transfer Receipt\n\nYou sent ${transferData.send_amount} ${transferData.send_currency} to ${transferData.recipient_name || '—'}.\nFee: ${transferData.fee} ${transferData.send_currency}\nReference: ${transferData.transaction_ref || ''}\n\nKalipehWallet`
 
   try {
-    // POST the full email content + SMTP credentials.
-    // Backend only needs to open an SMTP connection and send — no templates needed.
+    // Backend handles SMTP configuration
     await api.post('email/send', {
-      smtp_config: smtpConfig,
-      to:          senderEmail,
+      to:      senderEmail,
       subject,
       html,
       text,
@@ -387,8 +369,56 @@ export default function SendMoneyScreen() {
     navigation.navigate('PaymentMethods')
   }
 
+  // Delete a saved payment method
+  const deletePaymentMethod = (method) => {
+    Alert.alert(
+      'Delete Payment Method',
+      `Are you sure you want to delete ${method.label || 'this payment method'}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.delete(`/payment-methods/${method.id}`)
+              // Refresh payment methods list
+              const { data } = await api.get('payment-methods')
+              setPaymentMethods(data.payment_methods || [])
+              // Clear selection if deleted method was selected
+              if (selectedPayMethod?.id === method.id) {
+                setSelectedPayMethod(null)
+                setPaymentChosen(false)
+              }
+              Toast.show({ type: 'success', text1: 'Payment method deleted' })
+            } catch (err) {
+              const msg = err.response?.data?.detail || err.message || 'Failed to delete'
+              Toast.show({ type: 'error', text1: 'Delete failed', text2: msg })
+            }
+          },
+        },
+      ]
+    )
+  }
+
   // "Continue to send" — validate fields then open confirmation sheet
   const handleContinue = () => {
+    // Check KYC status before allowing transfer
+    if (user?.kyc_status !== 'verified') {
+      Alert.alert(
+        'KYC Required',
+        'You need to complete identity verification before sending money.',
+        [
+          { text: 'Later', style: 'cancel' },
+          {
+            text: 'Verify Now',
+            onPress: () => navigation.navigate('KYC'),
+          },
+        ]
+      )
+      return
+    }
+
     if (!toPhone.trim()) return Toast.show({ type: 'error', text1: 'Enter recipient phone' })
     if (!amount || sendAmt <= 0) return Toast.show({ type: 'error', text1: 'Enter an amount' })
     // Reset payment selection so user must choose on confirm sheet
@@ -399,12 +429,13 @@ export default function SendMoneyScreen() {
 
   // "Confirm transfer" — routes to the correct backend endpoint per delivery method
   const confirmTransfer = async () => {
-    // If card payment method is selected, show card entry modal first
-    if (selectedPayMethod?.type === 'card') {
+    // If card payment method is selected but no ID (new card), show card entry modal
+    if (selectedPayMethod?.type === 'card' && !selectedPayMethod?.id) {
       setShowCardEntry(true)
       return
     }
 
+    // For saved payment methods (card, ACH, etc.) or wallet, execute transfer directly
     await executeTransfer()
   }
 
@@ -459,8 +490,9 @@ export default function SendMoneyScreen() {
   const executeTransfer = async (skipBalanceCheck = false) => {
     setConfirming(true)
     try {
-      // Wallet selected — pre-check balance (skip on network error, let backend validate)
-      if (!skipBalanceCheck && selectedPayMethod === null) {
+      // Wallet selected — pre-check balance (skip if using saved payment method or explicit skip)
+      const usingSavedPaymentMethod = selectedPayMethod?.id != null
+      if (!skipBalanceCheck && !usingSavedPaymentMethod && selectedPayMethod === null) {
         try {
           const { data: freshWallet } = await api.get('wallet/balance')
           setWallet(freshWallet)
@@ -477,13 +509,17 @@ export default function SendMoneyScreen() {
       let responseData
       const resolvedRecipientName = quote?.recipient_name || recipientName.trim() || null
 
+      // Include payment_method_id if a saved payment method is selected
+      const paymentMethodId = selectedPayMethod?.id || null
+
       if (delivery === 'wave') {
         const { data } = await api.post('transfer/wave', {
-          to_phone:       toPhone,
-          amount:         sendAmt,
-          recv_currency:  destCcy,
+          to_phone:          toPhone,
+          amount:            sendAmt,
+          recv_currency:     destCcy,
           description,
-          recipient_name: resolvedRecipientName,
+          recipient_name:    resolvedRecipientName,
+          payment_method_id: paymentMethodId,
         })
         responseData = data
 
@@ -492,21 +528,23 @@ export default function SendMoneyScreen() {
         const agents = agentsRes.data?.agents || []
         if (!agents.length) throw new Error(`No cash pickup agents available in ${destCountry.name}`)
         const { data } = await api.post('transfer/cash-pickup', {
-          to_phone:       toPhone,
-          recipient_name: resolvedRecipientName || toPhone,
-          amount:         sendAmt,
-          recv_currency:  destCcy,
-          agent_id:       agents[0].id,
+          to_phone:          toPhone,
+          recipient_name:    resolvedRecipientName || toPhone,
+          amount:            sendAmt,
+          recv_currency:     destCcy,
+          agent_id:          agents[0].id,
           description,
+          payment_method_id: paymentMethodId,
         })
         responseData = data
 
       } else {
         const { data } = await api.post('transfer/send', {
-          to_phone:      toPhone,
-          amount:        sendAmt,
-          recv_currency: destCcy,
+          to_phone:          toPhone,
+          amount:            sendAmt,
+          recv_currency:     destCcy,
           description,
+          payment_method_id: paymentMethodId,
         })
         responseData = data
       }
@@ -548,81 +586,170 @@ export default function SendMoneyScreen() {
   if (result) {
     const sentDate = result.sent_at
       ? new Date(result.sent_at).toLocaleString('en', {
-          month: 'short', day: 'numeric', year: 'numeric',
+          weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
           hour: '2-digit', minute: '2-digit',
         })
       : ''
+    const refNumber = result.transaction_ref || `TXN${Date.now()}`
+    const recipientDisplayName = result.recipient_name && result.recipient_name !== toPhone
+      ? result.recipient_name : 'Recipient'
+    const senderCountry = user?.country || 'United States'
 
     return (
       <ScrollView
-        style={{ flex: 1, backgroundColor: '#F4F6F9' }}
-        contentContainerStyle={[s.successWrap, { paddingTop: insets.top + 20, paddingBottom: 40 }]}
+        style={{ flex: 1, backgroundColor: '#0A1628' }}
+        contentContainerStyle={{ paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}
       >
-        {/* Icon + title */}
-        <View style={s.successIconWrap}>
-          <CheckCircle size={48} color={TEAL} />
-        </View>
-        <Text style={s.successTitle}>Transfer Sent!</Text>
-        {sentDate ? <Text style={s.successDate}>{sentDate}</Text> : null}
-
-        {/* Recipient + received amount hero */}
-        <View style={s.successHero}>
-          <Text style={s.successHeroLabel}>
-            {result.recipient_name && result.recipient_name !== toPhone
-              ? result.recipient_name
-              : toPhone} will receive
-          </Text>
-          <Text style={s.successHeroAmount}>
-            {result.received_amount?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-            <Text style={s.successHeroCcy}> {result.recv_currency}</Text>
-          </Text>
+        {/* Dark header */}
+        <View style={rc.header}>
+          <View style={rc.headerTop}>
+            <Text style={rc.logoText}>KALIPAY</Text>
+            <View style={rc.statusBadge}>
+              <CheckCircle size={14} color="#10B981" />
+              <Text style={rc.statusText}>Successful</Text>
+            </View>
+          </View>
+          <Text style={rc.headerTitle}>Transfer Receipt</Text>
+          <Text style={rc.headerDate}>{sentDate}</Text>
+          <Text style={rc.headerRef}>Ref: {refNumber.slice(0, 20)}</Text>
         </View>
 
-        {/* Receipt card */}
-        <View style={s.successCard}>
-          <Text style={s.receiptCardTitle}>Receipt</Text>
-          {result.recipient_name && result.recipient_name !== toPhone && (
-            <SuccessRow label="Recipient" value={result.recipient_name} />
-          )}
-          <SuccessRow label="Phone"        value={toPhone} />
-          <SuccessRow label="You sent"     value={fmt(result.send_amount, result.send_currency)} bold />
-          <SuccessRow label="Fee (1.5%)"   value={fmt(result.fee, result.send_currency)} />
-          {result.recv_currency !== result.send_currency && (
-            <SuccessRow
-              label="Exchange rate"
-              value={`1 ${result.send_currency} = ${result.exchange_rate?.toFixed(4)} ${result.recv_currency}`}
-            />
-          )}
-          <SuccessRow label="Total debited" value={fmt(result.send_amount, result.send_currency)} bold />
-          <SuccessRow
-            label="Reference"
-            value={result.transaction_ref
-              ? result.transaction_ref.slice(0, 18) + (result.transaction_ref.length > 18 ? '…' : '')
-              : '—'}
-          />
+        {/* Main receipt card */}
+        <View style={rc.card}>
+          {/* Amount hero */}
+          <View style={rc.amountSection}>
+            <Text style={rc.amountLabel}>Amount Sent</Text>
+            <Text style={rc.amountValue}>
+              {fmt(result.send_amount, result.send_currency)}
+            </Text>
+            {result.recv_currency !== result.send_currency && (
+              <View style={rc.convertedRow}>
+                <ArrowRight size={14} color={TEAL} />
+                <Text style={rc.convertedText}>
+                  {result.received_amount?.toLocaleString(undefined, { maximumFractionDigits: 2 })} {result.recv_currency}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          <View style={rc.divider} />
+
+          {/* Sender section */}
+          <View style={rc.partySection}>
+            <View style={rc.partyHeader}>
+              <View style={rc.partyIconWrap}>
+                <Text style={rc.partyIcon}>↑</Text>
+              </View>
+              <Text style={rc.partyLabel}>FROM (Sender)</Text>
+            </View>
+            <View style={rc.partyDetails}>
+              <Text style={rc.partyName}>{user?.full_name || 'You'}</Text>
+              <View style={rc.partyInfoRow}>
+                <Text style={rc.partyInfoIcon}>📍</Text>
+                <Text style={rc.partyInfoText}>{senderCountry}</Text>
+              </View>
+              {user?.phone && (
+                <View style={rc.partyInfoRow}>
+                  <Text style={rc.partyInfoIcon}>📱</Text>
+                  <Text style={rc.partyInfoText}>{user.phone}</Text>
+                </View>
+              )}
+            </View>
+          </View>
+
+          <View style={rc.connectionLine}>
+            <View style={rc.lineDot} />
+            <View style={rc.lineBar} />
+            <View style={rc.lineDot} />
+          </View>
+
+          {/* Recipient section */}
+          <View style={rc.partySection}>
+            <View style={rc.partyHeader}>
+              <View style={[rc.partyIconWrap, { backgroundColor: '#D1FAE5' }]}>
+                <Text style={[rc.partyIcon, { color: '#059669' }]}>↓</Text>
+              </View>
+              <Text style={rc.partyLabel}>TO (Recipient)</Text>
+            </View>
+            <View style={rc.partyDetails}>
+              <Text style={rc.partyName}>{recipientDisplayName}</Text>
+              <View style={rc.partyInfoRow}>
+                <Text style={rc.partyInfoIcon}>{destCountry.flag}</Text>
+                <Text style={rc.partyInfoText}>{destCountry.name}</Text>
+              </View>
+              <View style={rc.partyInfoRow}>
+                <Text style={rc.partyInfoIcon}>📱</Text>
+                <Text style={rc.partyInfoText}>{toPhone}</Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={rc.divider} />
+
+          {/* Transaction details */}
+          <View style={rc.detailsSection}>
+            <Text style={rc.detailsSectionTitle}>Transaction Details</Text>
+            <View style={rc.detailRow}>
+              <Text style={rc.detailLabel}>Transfer Amount</Text>
+              <Text style={rc.detailValue}>{fmt(result.send_amount, result.send_currency)}</Text>
+            </View>
+            <View style={rc.detailRow}>
+              <Text style={rc.detailLabel}>Transfer Fee (1.5%)</Text>
+              <Text style={rc.detailValue}>{fmt(result.fee, result.send_currency)}</Text>
+            </View>
+            {result.recv_currency !== result.send_currency && (
+              <View style={rc.detailRow}>
+                <Text style={rc.detailLabel}>Exchange Rate</Text>
+                <Text style={rc.detailValue}>1 {result.send_currency} = {result.exchange_rate?.toFixed(4)} {result.recv_currency}</Text>
+              </View>
+            )}
+            <View style={rc.detailRow}>
+              <Text style={rc.detailLabel}>Recipient Gets</Text>
+              <Text style={[rc.detailValue, { color: TEAL, fontWeight: '700' }]}>
+                {result.received_amount?.toLocaleString(undefined, { maximumFractionDigits: 2 })} {result.recv_currency}
+              </Text>
+            </View>
+            <View style={[rc.detailRow, { borderBottomWidth: 0 }]}>
+              <Text style={rc.detailLabel}>Delivery Method</Text>
+              <Text style={rc.detailValue}>
+                {delivery === 'wave' ? 'Wave Mobile Money' : delivery === 'cash' ? 'Cash Pickup' : 'Mobile Wallet'}
+              </Text>
+            </View>
+          </View>
+
+          {/* Total */}
+          <View style={rc.totalSection}>
+            <Text style={rc.totalLabel}>Total Charged</Text>
+            <Text style={rc.totalValue}>{fmt(result.send_amount, result.send_currency)}</Text>
+          </View>
         </View>
 
-        {/* Receipt email badge */}
+        {/* Email receipt badge */}
         {user?.email && (
-          <View style={s.receiptEmailBadge}>
-            <Mail size={14} color={TEAL} />
-            <Text style={s.receiptEmailText}>
-              Receipt sent to <Text style={{ fontWeight: '700' }}>{user.email}</Text>
+          <View style={rc.emailBadge}>
+            <Mail size={16} color={TEAL} />
+            <Text style={rc.emailText}>
+              Receipt emailed to <Text style={{ fontWeight: '700' }}>{user.email}</Text>
             </Text>
           </View>
         )}
 
         {/* Action buttons */}
-        <TouchableOpacity style={s.successBtn} onPress={() => navigation.navigate('Main')}>
-          <Text style={s.successBtnText}>Back to Home</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={s.successBtnSecondary}
-          onPress={() => navigation.navigate('Transactions')}
-        >
-          <Text style={s.successBtnSecondaryText}>View History</Text>
-        </TouchableOpacity>
+        <View style={rc.actions}>
+          <TouchableOpacity style={rc.primaryBtn} onPress={() => navigation.navigate('Main')}>
+            <Text style={rc.primaryBtnText}>Back to Home</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={rc.secondaryBtn} onPress={() => navigation.navigate('Transactions')}>
+            <Text style={rc.secondaryBtnText}>View All Transactions</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Footer */}
+        <Text style={rc.footer}>
+          Thank you for using KalipehWallet{'\n'}
+          Questions? Contact support@kalipay.com
+        </Text>
       </ScrollView>
     )
   }
@@ -1023,63 +1150,79 @@ export default function SendMoneyScreen() {
 
                     {/* ── Credit / Debit Card ── */}
                     <Text style={cs.pickerSection}>Credit / Debit Card</Text>
-                    {savedCards.length > 0 ? savedCards.map(m => (
-                      <TouchableOpacity
-                        key={m.id}
-                        style={[cs.pickerRow, selectedPayMethod?.id === m.id && cs.pickerRowSelected]}
-                        onPress={() => { setSelectedPayMethod(m); setPaymentChosen(true); setShowPayPicker(false) }}
-                        activeOpacity={0.75}
-                      >
-                        <PayMethodBadge method={m} />
-                        <View style={{ flex: 1 }}>
-                          <Text style={cs.pickerLabel}>{m.label}</Text>
-                          <Text style={cs.pickerSub}>
-                            {m.last_four ? `•••${m.last_four}` : m.expiry_month ? `Expires ${String(m.expiry_month).padStart(2,'0')}/${m.expiry_year}` : 'Card'}
-                          </Text>
-                        </View>
-                        {selectedPayMethod?.id === m.id && <View style={cs.selectedDot} />}
-                      </TouchableOpacity>
-                    )) : (
-                      <TouchableOpacity style={cs.pickerAddRow} onPress={goAddPaymentMethod} activeOpacity={0.75}>
-                        <View style={[cs.walletBadge, { backgroundColor: '#F3F4F6', width: 44 }]}>
-                          <Text style={{ fontSize: 16 }}>💳</Text>
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={cs.pickerLabel}>Credit or Debit Card</Text>
-                          <Text style={cs.pickerSub}>Add a new card</Text>
-                        </View>
-                        <Text style={cs.pickerAddChevron}>›</Text>
-                      </TouchableOpacity>
-                    )}
+                    {savedCards.map(m => (
+                      <View key={m.id} style={[cs.pickerRow, selectedPayMethod?.id === m.id && cs.pickerRowSelected]}>
+                        <TouchableOpacity
+                          style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 14 }}
+                          onPress={() => { setSelectedPayMethod(m); setPaymentChosen(true); setShowPayPicker(false) }}
+                          activeOpacity={0.75}
+                        >
+                          <PayMethodBadge method={m} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={cs.pickerLabel}>{m.label}</Text>
+                            <Text style={cs.pickerSub}>
+                              {m.last_four ? `•••${m.last_four}` : m.expiry_month ? `Expires ${String(m.expiry_month).padStart(2,'0')}/${m.expiry_year}` : 'Card'}
+                            </Text>
+                          </View>
+                          {selectedPayMethod?.id === m.id && <View style={cs.selectedDot} />}
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={cs.deleteBtn}
+                          onPress={() => deletePaymentMethod(m)}
+                          activeOpacity={0.6}
+                        >
+                          <Trash2 size={18} color="#EF4444" />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                    {/* Always show Add new card option */}
+                    <TouchableOpacity style={cs.pickerAddRow} onPress={goAddPaymentMethod} activeOpacity={0.75}>
+                      <View style={[cs.walletBadge, { backgroundColor: LIGHT_TEAL, width: 44 }]}>
+                        <Plus size={20} color={TEAL} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={cs.pickerLabel}>Add New Card</Text>
+                        <Text style={cs.pickerSub}>Credit or debit card</Text>
+                      </View>
+                      <Text style={cs.pickerAddChevron}>›</Text>
+                    </TouchableOpacity>
 
                     {/* ── ACH Bank Transfer ── */}
                     <Text style={cs.pickerSection}>ACH Bank Transfer</Text>
-                    {savedACH.length > 0 ? savedACH.map(m => (
-                      <TouchableOpacity
-                        key={m.id}
-                        style={[cs.pickerRow, selectedPayMethod?.id === m.id && cs.pickerRowSelected]}
-                        onPress={() => { setSelectedPayMethod(m); setPaymentChosen(true); setShowPayPicker(false) }}
-                        activeOpacity={0.75}
-                      >
-                        <PayMethodBadge method={m} />
-                        <View style={{ flex: 1 }}>
-                          <Text style={cs.pickerLabel}>{m.label}</Text>
-                          <Text style={cs.pickerSub}>Bank account</Text>
-                        </View>
-                        {selectedPayMethod?.id === m.id && <View style={cs.selectedDot} />}
-                      </TouchableOpacity>
-                    )) : (
-                      <TouchableOpacity style={cs.pickerAddRow} onPress={goAddPaymentMethod} activeOpacity={0.75}>
-                        <View style={[cs.walletBadge, { backgroundColor: '#F3F4F6', width: 44 }]}>
-                          <Text style={{ fontSize: 16 }}>🏛</Text>
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={cs.pickerLabel}>ACH Bank Transfer</Text>
-                          <Text style={cs.pickerSub}>Add a bank account</Text>
-                        </View>
-                        <Text style={cs.pickerAddChevron}>›</Text>
-                      </TouchableOpacity>
-                    )}
+                    {savedACH.map(m => (
+                      <View key={m.id} style={[cs.pickerRow, selectedPayMethod?.id === m.id && cs.pickerRowSelected]}>
+                        <TouchableOpacity
+                          style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 14 }}
+                          onPress={() => { setSelectedPayMethod(m); setPaymentChosen(true); setShowPayPicker(false) }}
+                          activeOpacity={0.75}
+                        >
+                          <PayMethodBadge method={m} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={cs.pickerLabel}>{m.label}</Text>
+                            <Text style={cs.pickerSub}>Bank account</Text>
+                          </View>
+                          {selectedPayMethod?.id === m.id && <View style={cs.selectedDot} />}
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={cs.deleteBtn}
+                          onPress={() => deletePaymentMethod(m)}
+                          activeOpacity={0.6}
+                        >
+                          <Trash2 size={18} color="#EF4444" />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                    {/* Always show Add bank account option */}
+                    <TouchableOpacity style={cs.pickerAddRow} onPress={goAddPaymentMethod} activeOpacity={0.75}>
+                      <View style={[cs.walletBadge, { backgroundColor: LIGHT_TEAL, width: 44 }]}>
+                        <Plus size={20} color={TEAL} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={cs.pickerLabel}>Add Bank Account</Text>
+                        <Text style={cs.pickerSub}>ACH bank transfer</Text>
+                      </View>
+                      <Text style={cs.pickerAddChevron}>›</Text>
+                    </TouchableOpacity>
 
                   </ScrollView>
                 </View>
@@ -1654,6 +1797,296 @@ const cs = StyleSheet.create({
   pickerLabel:    { fontSize: 15, fontWeight: '600', color: '#111' },
   pickerSub:      { fontSize: 13, color: '#888', marginTop: 2 },
   selectedDot:    { width: 10, height: 10, borderRadius: 5, backgroundColor: '#F5C842' },
+  deleteBtn:      { padding: 10, marginLeft: 4 },
+})
+
+// ── Professional Receipt styles ────────────────────────────────────────────────
+const rc = StyleSheet.create({
+  header: {
+    backgroundColor: '#0A1628',
+    paddingHorizontal: 24,
+    paddingTop: 60,
+    paddingBottom: 30,
+    alignItems: 'center',
+  },
+  headerTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 20,
+  },
+  logoText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#F5C842',
+    letterSpacing: 2,
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#10B981',
+  },
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#fff',
+    marginBottom: 8,
+  },
+  headerDate: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.6)',
+    marginBottom: 4,
+  },
+  headerRef: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.4)',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+
+  card: {
+    backgroundColor: '#fff',
+    marginHorizontal: 16,
+    marginTop: -10,
+    borderRadius: 24,
+    paddingVertical: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 30,
+    elevation: 15,
+  },
+
+  amountSection: {
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingBottom: 20,
+  },
+  amountLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#9CA3AF',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
+  amountValue: {
+    fontSize: 36,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  convertedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+    backgroundColor: '#F0FAF9',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  convertedText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: TEAL,
+  },
+
+  divider: {
+    height: 1,
+    backgroundColor: '#F3F4F6',
+    marginHorizontal: 24,
+    marginVertical: 16,
+  },
+
+  partySection: {
+    paddingHorizontal: 24,
+  },
+  partyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
+  partyIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  partyIcon: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#4F46E5',
+  },
+  partyLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#9CA3AF',
+    letterSpacing: 1,
+  },
+  partyDetails: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 16,
+    padding: 16,
+  },
+  partyName: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 10,
+  },
+  partyInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+  },
+  partyInfoIcon: {
+    fontSize: 14,
+  },
+  partyInfoText: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+
+  connectionLine: {
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  lineDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#E5E7EB',
+  },
+  lineBar: {
+    width: 2,
+    height: 20,
+    backgroundColor: '#E5E7EB',
+  },
+
+  detailsSection: {
+    paddingHorizontal: 24,
+  },
+  detailsSectionTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#9CA3AF',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 12,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  detailLabel: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  detailValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+    textAlign: 'right',
+    flex: 1,
+    marginLeft: 16,
+  },
+
+  totalSection: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginHorizontal: 24,
+    marginTop: 16,
+    backgroundColor: '#0A1628',
+    borderRadius: 16,
+    padding: 18,
+  },
+  totalLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.7)',
+  },
+  totalValue: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#fff',
+  },
+
+  emailBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginHorizontal: 16,
+    marginTop: 20,
+    backgroundColor: '#F0FAF9',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+  },
+  emailText: {
+    fontSize: 13,
+    color: '#0A7A76',
+  },
+
+  actions: {
+    paddingHorizontal: 16,
+    marginTop: 24,
+    gap: 12,
+  },
+  primaryBtn: {
+    backgroundColor: TEAL,
+    borderRadius: 32,
+    paddingVertical: 18,
+    alignItems: 'center',
+    shadowColor: TEAL,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 14,
+    elevation: 6,
+  },
+  primaryBtnText: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  secondaryBtn: {
+    borderRadius: 32,
+    paddingVertical: 16,
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  secondaryBtnText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.8)',
+  },
+
+  footer: {
+    textAlign: 'center',
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.4)',
+    marginTop: 30,
+    lineHeight: 20,
+  },
 })
 
 // ── Insufficient balance modal styles ─────────────────────────────────────────

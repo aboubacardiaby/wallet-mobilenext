@@ -191,13 +191,15 @@ function AddCardForm({ onDone }) {
   const submit = async () => {
     const [mm, yy] = expiry.split('/')
     if (!mm || !yy) return Toast.show({ type: 'error', text1: 'Invalid expiry date' })
+    if (!cvv) return Toast.show({ type: 'error', text1: 'CVV is required' })
     setSaving(true)
     try {
-      await api.post('payment-methods/card/pay', {
+      await api.post('payment-methods/card', {
         card_number: number.replace(/\s/g, ''),
         expiry_month: parseInt(mm, 10),
         expiry_year: parseInt('20' + yy, 10),
-        holder_name: name,
+        cvc: cvv,
+        holder_name: name || undefined,
         set_default: isDefault,
       })
       Toast.show({ type: 'success', text1: 'Card added!' })
