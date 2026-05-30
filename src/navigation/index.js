@@ -1,4 +1,4 @@
-import { NavigationContainer } from '@react-navigation/native'
+import { NavigationContainer, useNavigation } from '@react-navigation/native'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { ActivityIndicator, View } from 'react-native'
@@ -37,6 +37,7 @@ const INDIGO = '#4F46E5'
 const GRAY   = '#9CA3AF'
 
 function MainTabs() {
+  const navigation = useNavigation()
   return (
     <Tab.Navigator
       screenOptions={{
@@ -53,7 +54,8 @@ function MainTabs() {
       }}
     >
       <Tab.Screen name="Dashboard" component={DashboardScreen}
-        options={{ tabBarLabel: 'Home', tabBarIcon: ({ color, size }) => <Home size={size} color={color} /> }} />
+        options={{ tabBarLabel: 'Home', tabBarIcon: ({ color, size }) => <Home size={size} color={color} /> }}
+        listeners={{ tabPress: (e) => { e.preventDefault(); navigation.navigate('SendMoney') } }} />
       <Tab.Screen name="Transactions" component={TransactionsScreen}
         options={{ tabBarLabel: 'History', tabBarIcon: ({ color, size }) => <ArrowLeftRight size={size} color={color} /> }} />
       <Tab.Screen name="Exchange" component={ExchangeScreen}
@@ -89,8 +91,8 @@ export default function RootNavigator() {
           </>
         ) : (
           <>
-            <Stack.Screen name="Main"           component={MainTabs} />
             <Stack.Screen name="SendMoney"      component={SendMoneyScreen} />
+            <Stack.Screen name="Main"           component={MainTabs} />
             <Stack.Screen name="RequestMoney"   component={RequestMoneyScreen} />
             <Stack.Screen name="CashIn"         component={CashScreen} initialParams={{ type: 'in' }} />
             <Stack.Screen name="CashOut"        component={CashScreen} initialParams={{ type: 'out' }} />

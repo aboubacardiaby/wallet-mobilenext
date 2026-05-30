@@ -17,7 +17,8 @@
       "Bash(\"$LOCALAPPDATA/Android/Sdk/emulator/emulator.exe\" -list-avds)",
       "Bash(\"$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe\":*)",
       "Bash(./gradlew.bat:*)",
-      "Bash(\"C:\\\\Users\\\\Lenovo\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\emulator\\\\emulator.exe\" -avd Pixel_9_Pro)"
+      "Bash(\"C:\\\\Users\\\\Lenovo\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\emulator\\\\emulator.exe\" -avd Pixel_9_Pro)",
+      "Bash(adb:*)"
     ]
   }
 }

@@ -6,7 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
 import Toast from 'react-native-toast-message'
-import { ChevronDown, UserPlus, CheckCircle, ArrowRight, Zap, Shield, Clock, Mail, Trash2, Plus } from 'lucide-react-native'
+import { ChevronDown, UserPlus, CheckCircle, ArrowRight, Zap, Shield, Clock, Mail, Trash2, Plus, Home, ArrowLeftRight, TrendingUp, Bell, User } from 'lucide-react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
@@ -762,7 +762,7 @@ export default function SendMoneyScreen() {
     >
       <ScrollView
         style={{ flex: 1 }}
-        contentContainerStyle={{ paddingBottom: 48 }}
+        contentContainerStyle={{ paddingBottom: 16 }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
@@ -771,7 +771,7 @@ export default function SendMoneyScreen() {
 
           {/* Top row: avatar + invite */}
           <View style={s.topRow}>
-            <TouchableOpacity style={s.avatar} onPress={() => navigation.navigate('Profile')} activeOpacity={0.85}>
+            <TouchableOpacity style={s.avatar} onPress={() => navigation.navigate('Main', { screen: 'Profile' })} activeOpacity={0.85}>
               <Text style={s.avatarText}>{initials}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={s.inviteBtn} activeOpacity={0.8}>
@@ -1424,6 +1424,30 @@ export default function SendMoneyScreen() {
         </View>
       </Modal>
 
+      {/* ── Bottom Navigation Bar ── */}
+      <View style={[nav.container, { paddingBottom: insets.bottom }]}>
+        <TouchableOpacity style={nav.tab} onPress={() => navigation.navigate('SendMoney')} activeOpacity={0.7}>
+          <Home size={22} color="#4F46E5" />
+          <Text style={[nav.label, nav.labelActive]}>Home</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={nav.tab} onPress={() => navigation.navigate('Main', { screen: 'Transactions' })} activeOpacity={0.7}>
+          <ArrowLeftRight size={22} color="#9CA3AF" />
+          <Text style={nav.label}>History</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={nav.tab} onPress={() => navigation.navigate('Main', { screen: 'Exchange' })} activeOpacity={0.7}>
+          <TrendingUp size={22} color="#9CA3AF" />
+          <Text style={nav.label}>Exchange</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={nav.tab} onPress={() => navigation.navigate('Main', { screen: 'Notifications' })} activeOpacity={0.7}>
+          <Bell size={22} color="#9CA3AF" />
+          <Text style={nav.label}>Alerts</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={nav.tab} onPress={() => navigation.navigate('Main', { screen: 'Profile' })} activeOpacity={0.7}>
+          <User size={22} color="#9CA3AF" />
+          <Text style={nav.label}>Profile</Text>
+        </TouchableOpacity>
+      </View>
+
     </KeyboardAvoidingView>
   )
 }
@@ -1489,6 +1513,32 @@ function SuccessRow({ label, value, bold }) {
     </View>
   )
 }
+
+// ── Bottom Navigation Styles ──────────────────────────────────────────────────
+const nav = StyleSheet.create({
+  container: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+    paddingTop: 8,
+  },
+  tab: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 4,
+  },
+  label: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#9CA3AF',
+    marginTop: 4,
+  },
+  labelActive: {
+    color: '#4F46E5',
+  },
+})
 
 const s = StyleSheet.create({
   // ── Header band ──────────────────────────────────────────────────────────────
