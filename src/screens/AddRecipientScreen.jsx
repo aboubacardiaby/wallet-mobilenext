@@ -112,7 +112,7 @@ export default function AddRecipientScreen() {
       await Share.share({
         message: 'Join me on Kalipeh Wallet for fast and easy money transfers! Download the app now.',
       })
-    } catch { /* cancelled */ }
+    } catch { /* cancelled */  }
   }
 
   return (
