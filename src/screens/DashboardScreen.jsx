@@ -225,7 +225,7 @@ export default function DashboardScreen() {
         </View>
       </View>
 
-      {/* ── Rate ticker ── */}
+      {/* ── Rate ticker ──  */}
       {ticker && ticker.length > 0 && (
         <View style={s.px}>
           <TouchableOpacity
