@@ -1,0 +1,8 @@
+# Fastlane Appfile for Kalipeh Wallet
+# Documentation: https://docs.fastlane.tools/advanced/Appfile
+
+# Google Play Store package name
+package_name("com.kalipeh.mobile")
+
+# Path to Google Play service account JSON key
+json_key_file("google-play-service-account.json")

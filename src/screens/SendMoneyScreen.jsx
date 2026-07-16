@@ -369,6 +369,12 @@ export default function SendMoneyScreen() {
     navigation.navigate('PaymentMethods')
   }
 
+  // Show card entry modal for adding a new card during payment
+  const showAddCardDuringPayment = () => {
+    setShowPayPicker(false)
+    setShowCardEntry(true)
+  }
+
   // Delete a saved payment method
   const deletePaymentMethod = (method) => {
     Alert.alert(
@@ -429,13 +435,53 @@ export default function SendMoneyScreen() {
 
   // "Confirm transfer" — routes to the correct backend endpoint per delivery method
   const confirmTransfer = async () => {
+    console.log('[CONFIRM] selectedPayMethod:', JSON.stringify(selectedPayMethod))
+    console.log('[CONFIRM] paymentChosen:', paymentChosen)
+
     // If card payment method is selected but no ID (new card), show card entry modal
     if (selectedPayMethod?.type === 'card' && !selectedPayMethod?.id) {
       setShowCardEntry(true)
       return
     }
 
-    // For saved payment methods (card, ACH, etc.) or wallet, execute transfer directly
+    // If saved card is selected, process payment via card/pay endpoint first
+    if (selectedPayMethod?.type === 'card' && selectedPayMethod?.id) {
+      setConfirming(true)
+      try {
+        const payload = {
+          payment_method_id: selectedPayMethod.stripe_payment_method_id || selectedPayMethod.id,
+          payment_type: 'debit_card',
+          amount: sendAmt,
+          currency: senderCcy.toLowerCase(),
+          description: `Transfer to ${toPhone}`,
+        }
+        console.log('[STRIPE PAY] Payload:', JSON.stringify(payload))
+        console.log('[STRIPE PAY] Selected method:', JSON.stringify(selectedPayMethod))
+        const stripeResponse = await api.post('stripe/pay', payload)
+        console.log('[STRIPE PAY] Success:', JSON.stringify(stripeResponse.data))
+        // Card payment successful, now execute transfer
+        console.log('[STRIPE PAY] Now calling executeTransfer...')
+        await executeTransfer(true) // skip balance check, payment already processed
+        console.log('[STRIPE PAY] executeTransfer completed')
+      } catch (err) {
+        console.log('[STRIPE PAY] Error response:', JSON.stringify(err.response?.data))
+        console.log('[STRIPE PAY] Error status:', err.response?.status)
+        const detail = err.response?.data?.detail
+        let msg
+        if (Array.isArray(detail)) {
+          msg = detail.map(d => `${d.loc?.join('.')}: ${d.msg}` || JSON.stringify(d)).join('\n')
+        } else if (typeof detail === 'string') {
+          msg = detail
+        } else {
+          msg = err.response?.data?.message || err.message || 'Card payment failed. Please try again.'
+        }
+        Alert.alert('Card Payment Failed', msg)
+        setConfirming(false)
+      }
+      return
+    }
+
+    // For wallet or other payment methods, execute transfer directly
     await executeTransfer()
   }
 
@@ -455,7 +501,7 @@ export default function SendMoneyScreen() {
     setConfirming(true)
     try {
       // First, process the card payment to fund the wallet
-      await api.post('payment-methods/card/pay', {
+      const cardPayload = {
         card_number: cardNumber.replace(/\s/g, ''),
         expiry_month: parseInt(mm, 10),
         expiry_year: parseInt('20' + yy, 10),
@@ -463,7 +509,9 @@ export default function SendMoneyScreen() {
         holder_name: cardHolderName || undefined,
         amount: sendAmt,
         description: `Transfer to ${toPhone}`,
-      })
+      }
+      console.log('[CARD PAY] Payload:', JSON.stringify(cardPayload))
+      await api.post('payment-methods/card/pay', cardPayload)
 
       // Close card entry modal
       setShowCardEntry(false)
@@ -737,10 +785,16 @@ export default function SendMoneyScreen() {
 
         {/* Action buttons */}
         <View style={rc.actions}>
-          <TouchableOpacity style={rc.primaryBtn} onPress={() => navigation.navigate('Main')}>
-            <Text style={rc.primaryBtnText}>Back to Home</Text>
+          <TouchableOpacity style={rc.primaryBtn} onPress={() => {
+            setResult(null)
+            setAmount('')
+            setToPhone('')
+            setSelectedPayMethod(null)
+            setPaymentChosen(false)
+          }}>
+            <Text style={rc.primaryBtnText}>Send Another</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={rc.secondaryBtn} onPress={() => navigation.navigate('Transactions')}>
+          <TouchableOpacity style={rc.secondaryBtn} onPress={() => navigation.navigate('Main', { screen: 'Transactions' })}>
             <Text style={rc.secondaryBtnText}>View All Transactions</Text>
           </TouchableOpacity>
         </View>
@@ -984,7 +1038,7 @@ export default function SendMoneyScreen() {
         <View style={s.txSection}>
           <View style={s.txHeader}>
             <Text style={s.txTitle}>Transactions</Text>
-            <TouchableOpacity onPress={() => navigation.navigate('Transactions')} activeOpacity={0.7}>
+            <TouchableOpacity onPress={() => navigation.navigate('Main', { screen: 'Transactions' })} activeOpacity={0.7}>
               <Text style={s.seeAll}>See all</Text>
             </TouchableOpacity>
           </View>
@@ -1176,7 +1230,7 @@ export default function SendMoneyScreen() {
                       </View>
                     ))}
                     {/* Always show Add new card option */}
-                    <TouchableOpacity style={cs.pickerAddRow} onPress={goAddPaymentMethod} activeOpacity={0.75}>
+                    <TouchableOpacity style={cs.pickerAddRow} onPress={showAddCardDuringPayment} activeOpacity={0.75}>
                       <View style={[cs.walletBadge, { backgroundColor: LIGHT_TEAL, width: 44 }]}>
                         <Plus size={20} color={TEAL} />
                       </View>

@@ -1,0 +1,137 @@
+# Fastlane configuration for Kalipeh Wallet Android deployment
+# Documentation: https://docs.fastlane.tools
+
+default_platform(:android)
+
+platform :android do
+  desc "Runs all the tests"
+  lane :test do
+    gradle(task: "test")
+  end
+
+  desc "Build debug APK"
+  lane :build_debug do
+    gradle(
+      task: "assemble",
+      build_type: "Debug"
+    )
+  end
+
+  desc "Build release AAB (Android App Bundle)"
+  lane :build_release do
+    gradle(
+      task: "bundle",
+      build_type: "Release"
+    )
+  end
+
+  desc "Build release APK"
+  lane :build_apk do
+    gradle(
+      task: "assemble",
+      build_type: "Release"
+    )
+  end
+
+  desc "Deploy to Google Play"
+  lane :deploy do |options|
+    track = options[:track] || "internal"
+
+    # Validate track
+    valid_tracks = ["internal", "alpha", "beta", "production"]
+    unless valid_tracks.include?(track)
+      UI.user_error!("Invalid track: #{track}. Must be one of: #{valid_tracks.join(', ')}")
+    end
+
+    # Upload to Google Play
+    upload_to_play_store(
+      track: track,
+      aab: "app/build/outputs/bundle/release/app-release.aab",
+      json_key: "google-play-service-account.json",
+      package_name: "com.kalipeh.mobile",
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      release_status: track == "production" ? "completed" : "draft"
+    )
+
+    UI.success("Successfully deployed to #{track} track!")
+  end
+
+  desc "Promote from internal to beta"
+  lane :promote_to_beta do
+    upload_to_play_store(
+      track: "internal",
+      track_promote_to: "beta",
+      json_key: "google-play-service-account.json",
+      package_name: "com.kalipeh.mobile",
+      skip_upload_aab: true,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true
+    )
+    UI.success("Successfully promoted from internal to beta!")
+  end
+
+  desc "Promote from beta to production"
+  lane :promote_to_production do |options|
+    rollout = options[:rollout] || 1.0
+
+    upload_to_play_store(
+      track: "beta",
+      track_promote_to: "production",
+      json_key: "google-play-service-account.json",
+      package_name: "com.kalipeh.mobile",
+      skip_upload_aab: true,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      rollout: rollout.to_s
+    )
+    UI.success("Successfully promoted from beta to production with #{(rollout * 100).to_i}% rollout!")
+  end
+
+  desc "Increment version code"
+  lane :increment_version do
+    # Read current version code from build.gradle
+    gradle_file = "app/build.gradle"
+    gradle_content = File.read(gradle_file)
+
+    current_version_code = gradle_content.match(/versionCode (\d+)/)[1].to_i
+    new_version_code = current_version_code + 1
+
+    # Update version code
+    new_content = gradle_content.gsub(
+      /versionCode \d+/,
+      "versionCode #{new_version_code}"
+    )
+
+    File.write(gradle_file, new_content)
+    UI.success("Version code incremented from #{current_version_code} to #{new_version_code}")
+  end
+
+  desc "Set version name"
+  lane :set_version_name do |options|
+    version_name = options[:version]
+
+    unless version_name
+      UI.user_error!("Please provide version name: fastlane set_version_name version:1.2.0")
+    end
+
+    gradle_file = "app/build.gradle"
+    gradle_content = File.read(gradle_file)
+
+    new_content = gradle_content.gsub(
+      /versionName "[^"]+"/,
+      "versionName \"#{version_name}\""
+    )
+
+    File.write(gradle_file, new_content)
+    UI.success("Version name set to #{version_name}")
+  end
+
+  # Error handling
+  error do |lane, exception|
+    UI.error("Error in lane #{lane}: #{exception.message}")
+  end
+end

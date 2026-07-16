@@ -1,0 +1,6 @@
+# Fastlane plugins
+# Learn more: https://docs.fastlane.tools/plugins/available-plugins
+
+# Uncomment if you need these plugins:
+# gem 'fastlane-plugin-firebase_app_distribution'  # For Firebase distribution
+# gem 'fastlane-plugin-versioning_android'         # For advanced versioning

@@ -35,6 +35,16 @@ yarn-error.*
 android/app/build/
 android/.gradle/
 android/local.properties
+android/app/keystore.properties
+android/app/release.keystore
+android/app/*.keystore
+android/google-play-service-account.json
+
+# Fastlane
+android/fastlane/report.xml
+android/fastlane/Preview.html
+android/fastlane/screenshots/
+android/fastlane/test_output/
 
 # iOS
 ios/Pods/
