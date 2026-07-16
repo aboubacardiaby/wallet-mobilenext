@@ -118,7 +118,7 @@ export default function AddRecipientScreen() {
   return (
     <View style={[s.screen, { paddingTop: insets.top }]}>
 
-      {/* ── Dark header band ── */}
+      {/* ── Dark header band ──   */}
       <View style={s.headerBand}>
         <View style={s.headerTop}>
           <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
