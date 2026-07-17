@@ -102,12 +102,10 @@ jobs:
 
       - name: Create keystore.properties
         run: |
-          cat > android/app/keystore.properties << EOF
-          WALLET_UPLOAD_STORE_FILE=release.keystore
-          WALLET_UPLOAD_STORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}
-          WALLET_UPLOAD_KEY_ALIAS=${{ secrets.KEY_ALIAS }}
-          WALLET_UPLOAD_KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}
-          EOF
+          echo "WALLET_UPLOAD_STORE_FILE=release.keystore" > android/app/keystore.properties
+          echo "WALLET_UPLOAD_STORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> android/app/keystore.properties
+          echo "WALLET_UPLOAD_KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> android/app/keystore.properties
+          echo "WALLET_UPLOAD_KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> android/app/keystore.properties
 
       - name: Extract version info
         id: version
