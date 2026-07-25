@@ -21,7 +21,12 @@
       "Bash(adb:*)",
       "Bash(taskkill:*)",
       "Bash(curl:*)",
-      "Bash(python -m uvicorn:*)"
+      "Bash(python -m uvicorn:*)",
+      "Bash(emulator:*)",
+      "Bash(\"/c/Users/Lenovo/AppData/Local/Android/Sdk/platform-tools/sqlite3\" \"C:\\\\Users\\\\Lenovo\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--projects-repos-wallet-mobilenext\\\\9d317604-afe3-4b9a-aaf4-3576f0522f0e\\\\scratchpad\\\\RKStorage2.db\" \".tables\")",
+      "Bash(\"/c/Users/Lenovo/AppData/Local/Android/Sdk/platform-tools/sqlite3\" \"C:\\\\Users\\\\Lenovo\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--projects-repos-wallet-mobilenext\\\\9d317604-afe3-4b9a-aaf4-3576f0522f0e\\\\scratchpad\\\\RKStorage2.db\" \"select count\\(*\\) from catalystLocalStorage\")",
+      "Artifact",
+      "Read(//c/Users/Lenovo/AppData/Local/Temp/claude/C--projects-repos-wallet-mobilenext/9d317604-afe3-4b9a-aaf4-3576f0522f0e/scratchpad/**)"
     ]
   }
 }

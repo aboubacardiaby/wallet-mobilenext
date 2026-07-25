@@ -5,6 +5,7 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
+import { CardField, useStripe } from '@stripe/stripe-react-native'
 import Toast from 'react-native-toast-message'
 import { ChevronDown, UserPlus, CheckCircle, ArrowRight, Zap, Shield, Clock, Mail, Trash2, Plus, Home, ArrowLeftRight, TrendingUp, Bell, User } from 'lucide-react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
@@ -16,6 +17,18 @@ const TEAL = '#0E9E98'
 const LIGHT_TEAL = '#D4EFEE'
 const TEAL_TEXT = '#0A7A76'
 const BEIGE = '#F5F0E8'
+
+// CardField's `cardStyle` prop is native-only config, not RN's `style` — it
+// must be a plain object; StyleSheet.create() refs resolve only for `style`.
+const CARD_FIELD_STYLE = {
+  backgroundColor: '#F9FAFB',
+  borderWidth: 1.5,
+  borderColor: '#E5E7EB',
+  borderRadius: 14,
+  fontSize: 16,
+  textColor: '#111111',
+  placeholderColor: '#9CA3AF',
+}
 
 const DEST_COUNTRIES = [
   { name: 'Senegal',       flag: '🇸🇳', currency: 'XOF', dial: '+221' },
@@ -227,20 +240,12 @@ function fmt(n, ccy) {
   return `${sym} ${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
 }
 
-function formatCardNumber(raw) {
-  return raw.replace(/\D/g, '').slice(0, 16).replace(/(.{4})/g, '$1 ').trim()
-}
-
-function formatExpiry(raw) {
-  const d = raw.replace(/\D/g, '').slice(0, 4)
-  return d.length > 2 ? `${d.slice(0, 2)}/${d.slice(2)}` : d
-}
-
 export default function SendMoneyScreen() {
   const navigation = useNavigation()
   const route = useRoute()
   const insets = useSafeAreaInsets()
   const { user } = useAuth()
+  const { createPaymentMethod } = useStripe()
 
   const [wallet, setWallet]                 = useState(null)
   const [toPhone, setToPhone]               = useState(route.params?.to_phone || '')
@@ -265,9 +270,7 @@ export default function SendMoneyScreen() {
   const [showPayPicker, setShowPayPicker]         = useState(false)
   const [showInsufficientModal, setShowInsufficientModal] = useState(false)
   const [showCardEntry, setShowCardEntry]         = useState(false)
-  const [cardNumber, setCardNumber]               = useState('')
-  const [cardExpiry, setCardExpiry]               = useState('')
-  const [cardCvc, setCardCvc]                     = useState('')
+  const [cardDetails, setCardDetails]             = useState(null)
   const [cardHolderName, setCardHolderName]       = useState('')
 
   const senderCcy    = DEVICE_CURRENCY || user?.home_currency || wallet?.currency || 'USD'
@@ -485,40 +488,33 @@ export default function SendMoneyScreen() {
     await executeTransfer()
   }
 
-  // Process card payment and then execute transfer
+  // Tokenize the card client-side (raw PAN/CVC never reach our backend),
+  // then process the payment and execute the transfer.
   const processCardAndTransfer = async () => {
-    if (!cardNumber || !cardExpiry || !cardCvc) {
+    if (!cardDetails?.complete) {
       Toast.show({ type: 'error', text1: 'Please fill in all card details' })
-      return
-    }
-
-    const [mm, yy] = cardExpiry.split('/')
-    if (!mm || !yy) {
-      Toast.show({ type: 'error', text1: 'Invalid expiry date' })
       return
     }
 
     setConfirming(true)
     try {
-      // First, process the card payment to fund the wallet
-      const cardPayload = {
-        card_number: cardNumber.replace(/\s/g, ''),
-        expiry_month: parseInt(mm, 10),
-        expiry_year: parseInt('20' + yy, 10),
-        cvc: cardCvc,
-        holder_name: cardHolderName || undefined,
+      const { paymentMethod, error } = await createPaymentMethod({
+        paymentMethodType: 'Card',
+        paymentMethodData: cardHolderName ? { billingDetails: { name: cardHolderName } } : undefined,
+      })
+      if (error) throw new Error(error.message)
+
+      await api.post('stripe/pay', {
+        payment_method_id: paymentMethod.id,
+        payment_type: 'debit_card',
         amount: sendAmt,
+        currency: senderCcy.toLowerCase(),
         description: `Transfer to ${toPhone}`,
-      }
-      console.log('[CARD PAY] Payload:', JSON.stringify(cardPayload))
-      await api.post('payment-methods/card/pay', cardPayload)
+      })
 
       // Close card entry modal
       setShowCardEntry(false)
-      // Clear card details for security
-      setCardNumber('')
-      setCardExpiry('')
-      setCardCvc('')
+      setCardDetails(null)
       setCardHolderName('')
 
       // Now execute the transfer (wallet will have the funds)
@@ -1050,9 +1046,13 @@ export default function SendMoneyScreen() {
 
       </ScrollView>
 
-      {/* ── Confirmation bottom sheet ── */}
+      {/* ── Confirmation bottom sheet ──
+          Hidden (not unmounted) while the card-entry overlay shows: it's a
+          plain in-tree View, not a Modal, so it can't paint above this
+          Modal's separate native window — hiding this one avoids the clash,
+          and showConfirm itself stays true so it reappears once card entry closes. */}
       <Modal
-        visible={showConfirm}
+        visible={showConfirm && !showCardEntry}
         animationType="slide"
         transparent
         onRequestClose={() => setShowConfirm(false)}
@@ -1379,14 +1379,14 @@ export default function SendMoneyScreen() {
         </View>
       </Modal>
 
-      {/* ── Card entry modal ── */}
-      <Modal
-        visible={showCardEntry}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setShowCardEntry(false)}
-      >
-        <View style={cs.overlay}>
+      {/* ── Card entry overlay ──
+          Deliberately a plain View, not RN's <Modal>: Stripe's CardField uses
+          Jetpack Compose internally, and Modal hosts its content in a separate
+          Android Dialog window with no ViewTreeLifecycleOwner, which crashes
+          Compose on mount ("ViewTreeLifecycleOwner not found"). Rendering this
+          in-tree instead keeps it under the Activity's own lifecycle owner. */}
+      {showCardEntry && (
+        <View style={cs.cardEntryOverlay}>
           <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowCardEntry(false)} />
           <View style={[ce.sheet, { paddingBottom: insets.bottom + 24 }]}>
 
@@ -1404,46 +1404,16 @@ export default function SendMoneyScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Card number */}
-            <Text style={ce.label}>Card Number</Text>
-            <TextInput
-              style={ce.input}
-              placeholder="1234 5678 9012 3456"
-              placeholderTextColor="#9CA3AF"
-              keyboardType="number-pad"
-              maxLength={19}
-              value={cardNumber}
-              onChangeText={v => setCardNumber(formatCardNumber(v))}
+            {/* Card details — entered directly into Stripe's field; the raw
+                number/CVC are sent straight to Stripe and never touch our backend */}
+            <Text style={ce.label}>Card Details</Text>
+            <CardField
+              postalCodeEnabled={false}
+              placeholders={{ number: '1234 5678 9012 3456' }}
+              style={ce.cardField}
+              cardStyle={CARD_FIELD_STYLE}
+              onCardChange={setCardDetails}
             />
-
-            {/* Expiry + CVC row */}
-            <View style={ce.row}>
-              <View style={{ flex: 1 }}>
-                <Text style={ce.label}>Expiry</Text>
-                <TextInput
-                  style={ce.input}
-                  placeholder="MM/YY"
-                  placeholderTextColor="#9CA3AF"
-                  keyboardType="number-pad"
-                  maxLength={5}
-                  value={cardExpiry}
-                  onChangeText={v => setCardExpiry(formatExpiry(v))}
-                />
-              </View>
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={ce.label}>CVC</Text>
-                <TextInput
-                  style={ce.input}
-                  placeholder="123"
-                  placeholderTextColor="#9CA3AF"
-                  keyboardType="number-pad"
-                  maxLength={4}
-                  secureTextEntry
-                  value={cardCvc}
-                  onChangeText={v => setCardCvc(v.replace(/\D/g, '').slice(0, 4))}
-                />
-              </View>
-            </View>
 
             {/* Cardholder name */}
             <Text style={ce.label}>Cardholder Name (optional)</Text>
@@ -1457,9 +1427,9 @@ export default function SendMoneyScreen() {
 
             {/* Pay button */}
             <TouchableOpacity
-              style={[ce.payBtn, confirming && ce.payBtnDisabled]}
+              style={[ce.payBtn, (confirming || !cardDetails?.complete) && ce.payBtnDisabled]}
               onPress={processCardAndTransfer}
-              disabled={confirming}
+              disabled={confirming || !cardDetails?.complete}
               activeOpacity={0.85}
             >
               {confirming
@@ -1476,7 +1446,7 @@ export default function SendMoneyScreen() {
 
           </View>
         </View>
-      </Modal>
+      )}
 
       {/* ── Bottom Navigation Bar ── */}
       <View style={[nav.container, { paddingBottom: insets.bottom }]}>
@@ -1810,6 +1780,13 @@ function BreakRow({ label, value, last, valueStyle }) {
 const cs = StyleSheet.create({
   // ── Overlay & sheet ───────────────────────────────────────────────────────────
   overlay:    { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.55)' },
+  cardEntryOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    zIndex: 1000,
+    elevation: 20,
+  },
   sheet:      { backgroundColor: '#F4F6F9', borderTopLeftRadius: 28, borderTopRightRadius: 28, maxHeight: '95%' },
   handle:     { width: 40, height: 4, borderRadius: 2, backgroundColor: '#D1D5DB', alignSelf: 'center', marginTop: 10 },
 
@@ -2276,6 +2253,7 @@ const ce = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 14,
     fontSize: 16, color: '#111',
   },
+  cardField: { height: 50 },
   row: {
     flexDirection: 'row',
   },

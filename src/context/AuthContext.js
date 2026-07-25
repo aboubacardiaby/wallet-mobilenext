@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react'
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import api from '../api/client'
+import Toast from 'react-native-toast-message'
+import api, { setUnauthorizedHandler } from '../api/client'
 
 const AuthContext = createContext(null)
 
@@ -19,6 +20,14 @@ export function AuthProvider({ children }) {
       finally { setLoading(false) }
     }
     restore()
+  }, [])
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setToken(null)
+      setUser(null)
+      Toast.show({ type: 'error', text1: 'Session expired', text2: 'Please sign in again.' })
+    })
   }, [])
 
   const saveSession = useCallback(async (newToken, newUser) => {

@@ -5,6 +5,7 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
+import { CardField, useStripe } from '@stripe/stripe-react-native'
 import Toast from 'react-native-toast-message'
 import { ArrowLeft, CreditCard, Building2, Star, Trash2, Plus, X, Smartphone } from 'lucide-react-native'
 import api from '../api/client'
@@ -19,6 +20,18 @@ const BRAND_LOGO = {
   unknown:    { text: '💳',   bg: '#E5E7EB', fg: '#374151' },
 }
 
+// CardField's `cardStyle` prop is native-only config, not RN's `style` — it
+// must be a plain object; StyleSheet.create() refs resolve only for `style`.
+const CARD_FIELD_STYLE = {
+  backgroundColor: '#F9FAFB',
+  borderWidth: 1.5,
+  borderColor: '#E5E7EB',
+  borderRadius: 12,
+  fontSize: 14,
+  textColor: '#111827',
+  placeholderColor: '#9CA3AF',
+}
+
 const BASE_FORM_TABS = [
   { id: 'card',       label: 'Card',       icon: '💳' },
   { id: 'ach',        label: 'Bank (ACH)', icon: '🏛️' },
@@ -27,24 +40,13 @@ const BASE_FORM_TABS = [
   { id: 'google_pay', label: 'Google Pay', icon: '🇬' },
 ]
 
-function detectBrand(n) {
-  const d = n.replace(/\s/g, '')
-  if (d.startsWith('4')) return 'visa'
-  if (/^3[47]/.test(d)) return 'amex'
-  if (/^6(011|5)/.test(d)) return 'discover'
-  const p = parseInt(d.slice(0, 2), 10)
-  if (p >= 51 && p <= 55) return 'mastercard'
-  const p4 = parseInt(d.slice(0, 4), 10)
-  if (p4 >= 2221 && p4 <= 2720) return 'mastercard'
+function mapStripeBrand(brand) {
+  const k = (brand || '').toLowerCase()
+  if (k.includes('visa')) return 'visa'
+  if (k.includes('master')) return 'mastercard'
+  if (k.includes('american') || k === 'amex') return 'amex'
+  if (k.includes('discover')) return 'discover'
   return 'unknown'
-}
-
-function formatCardNumber(raw) {
-  return raw.replace(/\D/g, '').slice(0, 16).replace(/(.{4})/g, '$1 ').trim()
-}
-function formatExpiry(raw) {
-  const d = raw.replace(/\D/g, '').slice(0, 4)
-  return d.length > 2 ? `${d.slice(0, 2)}/${d.slice(2)}` : d
 }
 
 export default function PaymentMethodsScreen() {
@@ -180,25 +182,31 @@ export default function PaymentMethodsScreen() {
 }
 
 function AddCardForm({ onDone }) {
-  const [number, setNumber] = useState('')
-  const [expiry, setExpiry] = useState('')
-  const [cvv, setCvv] = useState('')
+  const { createPaymentMethod } = useStripe()
+  const [cardDetails, setCardDetails] = useState(null)
   const [name, setName] = useState('')
   const [isDefault, setIsDefault] = useState(false)
   const [saving, setSaving] = useState(false)
-  const brand = BRAND_LOGO[detectBrand(number)] || BRAND_LOGO.unknown
+  const brand = BRAND_LOGO[mapStripeBrand(cardDetails?.brand)] || BRAND_LOGO.unknown
 
   const submit = async () => {
-    const [mm, yy] = expiry.split('/')
-    if (!mm || !yy) return Toast.show({ type: 'error', text1: 'Invalid expiry date' })
-    if (!cvv) return Toast.show({ type: 'error', text1: 'CVV is required' })
+    if (!cardDetails?.complete) return Toast.show({ type: 'error', text1: 'Enter complete card details' })
     setSaving(true)
     try {
+      // Card details go straight to Stripe from the device — this app's own
+      // backend only ever sees the resulting token, never the PAN/CVC.
+      const { paymentMethod, error } = await createPaymentMethod({
+        paymentMethodType: 'Card',
+        paymentMethodData: name ? { billingDetails: { name } } : undefined,
+      })
+      if (error) throw new Error(error.message)
+
       await api.post('payment-methods/card', {
-        card_number: number.replace(/\s/g, ''),
-        expiry_month: parseInt(mm, 10),
-        expiry_year: parseInt('20' + yy, 10),
-        cvc: cvv,
+        payment_method_id: paymentMethod.id,
+        card_brand: mapStripeBrand(paymentMethod.Card?.brand),
+        last4: paymentMethod.Card?.last4,
+        expiry_month: paymentMethod.Card?.expiryMonth,
+        expiry_year: paymentMethod.Card?.expiryYear,
         holder_name: name || undefined,
         set_default: isDefault,
       })
@@ -216,19 +224,21 @@ function AddCardForm({ onDone }) {
   return (
     <View style={{ gap: 10 }}>
       <View style={{ position: 'relative' }}>
-        <TextInput style={sF.input} placeholder="1234 5678 9012 3456" placeholderTextColor="#9CA3AF" keyboardType="number-pad" maxLength={19} value={number} onChangeText={v => setNumber(formatCardNumber(v))} />
+        <CardField
+          postalCodeEnabled={false}
+          placeholders={{ number: '1234 5678 9012 3456' }}
+          style={sF.cardField}
+          cardStyle={CARD_FIELD_STYLE}
+          onCardChange={setCardDetails}
+        />
         <View style={[sF.brandTag, { backgroundColor: brand.bg }]}><Text style={[sF.brandTagText, { color: brand.fg }]}>{brand.text}</Text></View>
-      </View>
-      <View style={{ flexDirection: 'row', gap: 10 }}>
-        <TextInput style={[sF.input, { flex: 1 }]} placeholder="MM/YY" placeholderTextColor="#9CA3AF" keyboardType="number-pad" maxLength={5} value={expiry} onChangeText={v => setExpiry(formatExpiry(v))} />
-        <TextInput style={[sF.input, { flex: 1 }]} placeholder="CVV" placeholderTextColor="#9CA3AF" keyboardType="number-pad" maxLength={4} secureTextEntry value={cvv} onChangeText={v => setCvv(v.replace(/\D/g, '').slice(0, 4))} />
       </View>
       <TextInput style={sF.input} placeholder="Cardholder name" placeholderTextColor="#9CA3AF" value={name} onChangeText={setName} />
       <View style={sF.switchRow}>
         <Text style={sF.switchLabel}>Set as default</Text>
         <Switch value={isDefault} onValueChange={setIsDefault} trackColor={{ true: '#4F46E5' }} />
       </View>
-      <TouchableOpacity style={[sF.btn, saving && sF.btnDisabled]} onPress={submit} disabled={saving}>
+      <TouchableOpacity style={[sF.btn, (saving || !cardDetails?.complete) && sF.btnDisabled]} onPress={submit} disabled={saving || !cardDetails?.complete}>
         {saving ? <Spinner size="sm" color="#fff" /> : <Text style={sF.btnText}>Add Card</Text>}
       </TouchableOpacity>
     </View>
@@ -429,7 +439,8 @@ const s = StyleSheet.create({
 
 const sF = StyleSheet.create({
   input:       { backgroundColor: '#F9FAFB', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11, fontSize: 14, color: '#111827' },
-  brandTag:    { position: 'absolute', right: 12, top: '50%', marginTop: -10, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 4 },
+  cardField:   { height: 50 },
+  brandTag:    { position: 'absolute', right: 12, top: 13, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 4 },
   brandTagText:{ fontSize: 10, fontWeight: '900' },
   switchRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   switchLabel: { fontSize: 14, color: '#374151' },

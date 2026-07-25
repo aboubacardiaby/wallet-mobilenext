@@ -7,6 +7,11 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
+let onUnauthorized = null
+export function setUnauthorizedHandler(handler) {
+  onUnauthorized = handler
+}
+
 api.interceptors.request.use(async (config) => {
   const token = await AsyncStorage.getItem('token')
   if (token) config.headers.Authorization = `Bearer ${token}`
@@ -16,9 +21,10 @@ api.interceptors.request.use(async (config) => {
 api.interceptors.response.use(
   (res) => res,
   async (err) => {
-    if (err.response?.status === 401) {
+    const hadToken = !!err.config?.headers?.Authorization
+    if (err.response?.status === 401 && hadToken) {
       await AsyncStorage.multiRemove(['token', 'user'])
-      // Navigation handled by AuthContext listener
+      onUnauthorized?.()
     }
     return Promise.reject(err)
   }

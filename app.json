@@ -33,6 +33,12 @@
           "photosPermission": "Allow Kalipeh to access your photos for KYC verification.",
           "cameraPermission": "Allow Kalipeh to use your camera for document photos."
         }
+      ],
+      [
+        "@stripe/stripe-react-native",
+        {
+          "enableGooglePay": false
+        }
       ]
     ]
   }

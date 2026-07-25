@@ -25,16 +25,11 @@ export default function LoginScreen() {
     if (!dialCode.startsWith('+')) return Toast.show({ type: 'error', text1: 'Enter a valid dial code (e.g. +221)' })
     setLoading(true)
     const fullPhone = (dialCode + phone).replace(/\s/g, '')
-    console.log('[LOGIN] Request payload:', { phone_number: fullPhone, pin: String(pin) })
     try {
       const { data } = await api.post('auth/login', { phone_number: fullPhone, pin: String(pin) })
-      console.log('[LOGIN] Success response:', data)
       await saveSession(data.token, data.user)
       Toast.show({ type: 'success', text1: 'Welcome back!' })
     } catch (err) {
-      console.log('[LOGIN] Error status:', err.response?.status)
-      console.log('[LOGIN] Error data:', err.response?.data)
-      console.log('[LOGIN] Error message:', err.message)
       Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Login failed' })
     } finally {
       setLoading(false)

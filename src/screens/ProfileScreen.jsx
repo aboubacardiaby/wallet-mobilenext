@@ -52,8 +52,10 @@ export default function ProfileScreen() {
       const p = await refreshProfile()
       if (p) setProfile(p)
       setEditMode(false)
-    } catch {
-      Toast.show({ type: 'error', text1: 'Update failed' })
+    } catch (err) {
+      if (err.response?.status !== 401) {
+        Toast.show({ type: 'error', text1: 'Update failed' })
+      }
     } finally {
       setLoading(false)
     }
