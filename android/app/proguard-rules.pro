@@ -12,3 +12,7 @@
 -keep class com.facebook.react.turbomodule.** { *; }
 
 # Add any project specific keep options here:
+
+# Stripe: push provisioning is an optional dependency not included in this app.
+-dontwarn com.stripe.android.pushProvisioning.**
+-dontwarn com.google.android.gms.tapandpay.**
