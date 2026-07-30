@@ -1,17 +1,23 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ScrollView, KeyboardAvoidingView, Platform, Modal, Alert,
+  ScrollView, KeyboardAvoidingView, Platform, Modal, Alert, Switch,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
 import { CardField, useStripe } from '@stripe/stripe-react-native'
 import Toast from 'react-native-toast-message'
-import { ChevronDown, UserPlus, CheckCircle, ArrowRight, Zap, Shield, Clock, Mail, Trash2, Plus, Home, ArrowLeftRight, TrendingUp, Bell, User } from 'lucide-react-native'
+import { ChevronDown, UserPlus, CheckCircle, ArrowRight, Zap, Shield, Clock, Mail, Trash2, Plus, Home, ArrowLeftRight, TrendingUp, Bell, User, Wallet, Smartphone, Building2 } from 'lucide-react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import Spinner from '../components/Spinner'
+import { CURRENCY_SYMBOLS, fmt } from '../data/currencies'
+import useDeviceCurrency from '../hooks/useDeviceCurrency'
+import usePaymentMethods from '../hooks/usePaymentMethods'
+import useRecipients from '../hooks/useRecipients'
+import useWalletBalance from '../hooks/useWalletBalance'
+import useTransferQuote from '../hooks/useTransferQuote'
 
 const TEAL = '#0E9E98'
 const LIGHT_TEAL = '#D4EFEE'
@@ -50,37 +56,15 @@ const DEST_COUNTRIES = [
   { name: 'Gambia',        flag: '🇬🇲', currency: 'GMD', dial: '+220' },
 ]
 
-const CURRENCY_SYMBOLS = {
-  USD: '$', EUR: '€', GBP: '£', CAD: 'C$', CHF: 'Fr',
-  XOF: 'XOF', XAF: 'XAF', NGN: '₦', GHS: '₵', KES: 'KSh',
-  MAD: 'MAD', ZAR: 'R', EGP: '£E', GNF: 'GNF', ETB: 'Br', GMD: 'D',
-  SEK: 'kr', NOK: 'kr', DKK: 'kr', AUD: 'A$', NZD: 'NZ$',
-}
+// 'wallet' only works when the recipient has a registered Kalipeh account —
+// gated at selection time using the /transfer/quote `recipient_found` flag.
+const DELIVERY_OPTIONS = [
+  { id: 'wallet', label: 'Mobile Wallet', icon: Wallet,     needsAccount: true  },
+  { id: 'wave',   label: 'Wave',          icon: Smartphone, needsAccount: false },
+  { id: 'cash',   label: 'Cash Pickup',   icon: Building2,  needsAccount: false },
+]
 
-// ISO 3166-1 alpha-2 region → ISO 4217 currency for sender countries
-const REGION_CURRENCY = {
-  US: 'USD', CA: 'CAD', GB: 'GBP', CH: 'CHF',
-  FR: 'EUR', DE: 'EUR', ES: 'EUR', IT: 'EUR', PT: 'EUR',
-  BE: 'EUR', NL: 'EUR', AT: 'EUR', FI: 'EUR', IE: 'EUR',
-  LU: 'EUR', MT: 'EUR', SK: 'EUR', SI: 'EUR', EE: 'EUR',
-  LV: 'EUR', LT: 'EUR', CY: 'EUR', GR: 'EUR',
-  SE: 'SEK', NO: 'NOK', DK: 'DKK',
-  AU: 'AUD', NZ: 'NZD',
-}
-
-function getDeviceCurrency() {
-  try {
-    const locale = Intl.DateTimeFormat().resolvedOptions().locale // e.g. "en-US", "fr-FR"
-    const parts = locale.split('-')
-    // Region tag is always the last BCP-47 subtag that is 2 uppercase letters
-    const region = parts.reverse().find(p => /^[A-Z]{2}$/.test(p))
-    return region ? (REGION_CURRENCY[region] || null) : null
-  } catch {
-    return null
-  }
-}
-
-const DEVICE_CURRENCY = getDeviceCurrency()
+// Hard-coded fee rate remains until Phase 3 (backend-driven quote)
 
 const FEE_RATE = 0.015
 
@@ -90,6 +74,15 @@ const BRAND_LOGO = {
   amex:       { text: 'AMEX', bg: '#2563EB', fg: '#fff' },
   discover:   { text: 'DISC', bg: '#EA580C', fg: '#fff' },
   unknown:    { text: '💳',   bg: '#E5E7EB', fg: '#374151' },
+}
+
+function mapStripeBrand(brand) {
+  const k = (brand || '').toLowerCase()
+  if (k.includes('visa')) return 'visa'
+  if (k.includes('master')) return 'mastercard'
+  if (k.includes('american') || k === 'amex') return 'amex'
+  if (k.includes('discover')) return 'discover'
+  return 'unknown'
 }
 
 const TYPE_BADGE = {
@@ -234,12 +227,6 @@ async function sendReceipt(transferData, senderEmail, senderName) {
   }
 }
 
-function fmt(n, ccy) {
-  if (n == null || isNaN(n)) return '—'
-  const sym = CURRENCY_SYMBOLS[ccy] || ccy
-  return `${sym} ${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-}
-
 export default function SendMoneyScreen() {
   const navigation = useNavigation()
   const route = useRoute()
@@ -247,7 +234,6 @@ export default function SendMoneyScreen() {
   const { user } = useAuth()
   const { createPaymentMethod } = useStripe()
 
-  const [wallet, setWallet]                 = useState(null)
   const [toPhone, setToPhone]               = useState(route.params?.to_phone || '')
   const [delivery, setDelivery]             = useState(route.params?.delivery || 'wallet')
   const [description, setDescription]       = useState('')
@@ -257,14 +243,10 @@ export default function SendMoneyScreen() {
   const [showCountryPicker, setShowCountryPicker] = useState(false)
   const [liveRate, setLiveRate]             = useState(null)
   const [rateLoading, setRateLoading]       = useState(false)
-  const [quote, setQuote]                   = useState(null)
-  const [quoteLoading, setQuoteLoading]     = useState(false)
   const [loading, setLoading]               = useState(false)
   const [confirming, setConfirming]         = useState(false)
   const [showConfirm, setShowConfirm]       = useState(false)
   const [result, setResult]                 = useState(null)
-  const [transactions, setTransactions]     = useState([])
-  const [paymentMethods, setPaymentMethods] = useState([])
   const [selectedPayMethod, setSelectedPayMethod] = useState(null) // null = wallet
   const [paymentChosen, setPaymentChosen]         = useState(false)
   const [showPayPicker, setShowPayPicker]         = useState(false)
@@ -272,8 +254,14 @@ export default function SendMoneyScreen() {
   const [showCardEntry, setShowCardEntry]         = useState(false)
   const [cardDetails, setCardDetails]             = useState(null)
   const [cardHolderName, setCardHolderName]       = useState('')
+  const [saveCard, setSaveCard]                   = useState(true)
 
-  const senderCcy    = DEVICE_CURRENCY || user?.home_currency || wallet?.currency || 'USD'
+  const deviceCcy = useDeviceCurrency()
+  const { wallet, setWallet, transactions, setTransactions, refresh: refreshWallet } = useWalletBalance()
+  const { paymentMethods, setPaymentMethods, refresh: refreshPaymentMethods } = usePaymentMethods()
+  const { recipients: savedRecipients, setRecipients: setSavedRecipients, refresh: refreshRecipients } = useRecipients()
+  const senderCcy    = deviceCcy || user?.home_currency || wallet?.currency || 'USD'
+  const { quote, loading: quoteLoading, refresh: fetchQuote } = useTransferQuote(toPhone, amount, senderCcy, destCcy)
   const destCcy      = destCountry.currency
   const sendAmt      = parseFloat(amount) || 0
   const fee          = parseFloat((sendAmt * FEE_RATE).toFixed(2))
@@ -324,36 +312,52 @@ export default function SendMoneyScreen() {
       .finally(() => setRateLoading(false))
   }, [senderCcy, destCcy])
 
+  // Quote may also carry a known exchange rate
   useEffect(() => {
-    api.get('wallet/balance').then(({ data }) => setWallet(data)).catch(() => {})
-    api.get('wallet/transactions?page=1&limit=5').then(({ data }) => setTransactions(data.transactions || [])).catch(() => {})
-    api.get('payment-methods').then(({ data }) => setPaymentMethods(data.payment_methods || [])).catch(() => {})
-  }, [])
+    if (quote?.recipient_found && quote?.exchange_rate) setLiveRate(quote.exchange_rate)
+  }, [quote])
 
+  // Refresh payment methods and recipients when the screen is focused
   useFocusEffect(useCallback(() => {
-    api.get('payment-methods').then(({ data }) => setPaymentMethods(data.payment_methods || [])).catch(() => {})
-  }, []))
+    refreshPaymentMethods()
+    refreshRecipients()
+  }, [refreshPaymentMethods, refreshRecipients]))
 
-  const fetchQuote = useCallback(async (phone, amt, recvCcy) => {
-    if (!phone || !amt || parseFloat(amt) <= 0) { setQuote(null); return }
-    setQuoteLoading(true)
-    try {
-      const { data } = await api.get(
-        `transfer/quote?to_phone=${encodeURIComponent(phone)}&amount=${amt}&recv_currency=${recvCcy}`
-      )
-      setQuote(data)
-      if (data.recipient_found && data.exchange_rate) setLiveRate(data.exchange_rate)
-    } catch { setQuote(null) }
-    finally { setQuoteLoading(false) }
-  }, [])
-
+  // Pull the name from a saved recipient when the phone matches one; otherwise
+  // clear it so unknown numbers still require manual entry.
   useEffect(() => {
-    const t = setTimeout(() => fetchQuote(toPhone, amount, destCcy), 600)
-    return () => clearTimeout(t)
-  }, [toPhone, amount, destCcy, fetchQuote])
+    const normalized = toPhone.replace(/[\s\-()]/g, '')
+    const saved = normalized
+      ? savedRecipients.find(r => r.phone_number.replace(/[\s\-()]/g, '') === normalized)
+      : null
+    setRecipientName(saved ? (saved.nickname || saved.full_name || '') : '')
+  }, [toPhone, savedRecipients])
 
-  // Reset manual name when phone changes
-  useEffect(() => { setRecipientName('') }, [toPhone])
+  // Mobile Wallet delivery only works if the recipient has a Kalipeh account.
+  // Once the quote confirms they don't, bail out of 'wallet' automatically —
+  // otherwise the user reaches payment before discovering the transfer can't
+  // go through. Guarded per phone number so it fires once, not on every quote refresh.
+  const autoSwitchedForPhone = useRef(null)
+  useEffect(() => {
+    if (quoteLoading || !quote) return
+    if (delivery !== 'wallet' || quote.recipient_found) return
+    if (autoSwitchedForPhone.current === toPhone) return
+    autoSwitchedForPhone.current = toPhone
+    setDelivery('cash')
+    Toast.show({
+      type: 'info',
+      text1: 'Switched to Cash Pickup',
+      text2: 'This recipient doesn\'t have a Kalipeh wallet yet',
+    })
+  }, [quote, quoteLoading, delivery, toPhone])
+
+  const selectDelivery = (id) => {
+    if (id === 'wallet' && quote && !quote.recipient_found) {
+      Toast.show({ type: 'error', text1: 'Recipient needs a Kalipeh wallet for this option' })
+      return
+    }
+    setDelivery(id)
+  }
 
   const walletBalance = parseFloat(wallet?.balance || 0)
   const shortfall     = Math.max(0, parseFloat((sendAmt - walletBalance).toFixed(2)))
@@ -430,6 +434,9 @@ export default function SendMoneyScreen() {
 
     if (!toPhone.trim()) return Toast.show({ type: 'error', text1: 'Enter recipient phone' })
     if (!amount || sendAmt <= 0) return Toast.show({ type: 'error', text1: 'Enter an amount' })
+    if (delivery === 'wallet' && quote && !quote.recipient_found) {
+      return Toast.show({ type: 'error', text1: 'Recipient needs a Kalipeh wallet for this option' })
+    }
     // Reset payment selection so user must choose on confirm sheet
     setSelectedPayMethod(null)
     setPaymentChosen(false)
@@ -512,6 +519,20 @@ export default function SendMoneyScreen() {
         description: `Transfer to ${toPhone}`,
       })
 
+      // Persist the card for future use — best-effort, doesn't block the transfer
+      if (saveCard) {
+        try {
+          await api.post('payment-methods/card', {
+            payment_method_id: paymentMethod.id,
+            card_brand: mapStripeBrand(paymentMethod.Card?.brand),
+            last4: paymentMethod.Card?.last4,
+            expiry_month: paymentMethod.Card?.expiryMonth,
+            expiry_year: paymentMethod.Card?.expiryYear,
+            holder_name: cardHolderName || undefined,
+          })
+        } catch { /* non-critical — the transfer already succeeded */ }
+      }
+
       // Close card entry modal
       setShowCardEntry(false)
       setCardDetails(null)
@@ -560,6 +581,7 @@ export default function SendMoneyScreen() {
         const { data } = await api.post('transfer/wave', {
           to_phone:          toPhone,
           amount:            sendAmt,
+          send_currency:     senderCcy,
           recv_currency:     destCcy,
           description,
           recipient_name:    resolvedRecipientName,
@@ -575,6 +597,7 @@ export default function SendMoneyScreen() {
           to_phone:          toPhone,
           recipient_name:    resolvedRecipientName || toPhone,
           amount:            sendAmt,
+          send_currency:     senderCcy,
           recv_currency:     destCcy,
           agent_id:          agents[0].id,
           description,
@@ -586,6 +609,7 @@ export default function SendMoneyScreen() {
         const { data } = await api.post('transfer/send', {
           to_phone:          toPhone,
           amount:            sendAmt,
+          send_currency:     senderCcy,
           recv_currency:     destCcy,
           description,
           payment_method_id: paymentMethodId,
@@ -916,6 +940,30 @@ export default function SendMoneyScreen() {
                 onChangeText={setRecipientName}
                 autoCorrect={false}
               />
+            </View>
+          )}
+
+          {/* Delivery method */}
+          {toPhone.length > 5 && (
+            <View style={s.deliveryRow}>
+              {DELIVERY_OPTIONS.map(opt => {
+                const Icon = opt.icon
+                const disabled = opt.needsAccount && quote && !quote.recipient_found
+                const active = delivery === opt.id
+                return (
+                  <TouchableOpacity
+                    key={opt.id}
+                    style={[s.deliveryPill, active && s.deliveryPillActive, disabled && s.deliveryPillDisabled]}
+                    onPress={() => selectDelivery(opt.id)}
+                    activeOpacity={0.8}
+                  >
+                    <Icon size={14} color={disabled ? '#C4C9D4' : active ? '#fff' : TEAL} />
+                    <Text style={[s.deliveryPillText, active && s.deliveryPillTextActive, disabled && s.deliveryPillTextDisabled]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                )
+              })}
             </View>
           )}
 
@@ -1425,6 +1473,12 @@ export default function SendMoneyScreen() {
               onChangeText={setCardHolderName}
             />
 
+            {/* Save for future use */}
+            <View style={ce.switchRow}>
+              <Text style={ce.switchLabel}>Save card for future payments</Text>
+              <Switch value={saveCard} onValueChange={setSaveCard} trackColor={{ true: TEAL }} />
+            </View>
+
             {/* Pay button */}
             <TouchableOpacity
               style={[ce.payBtn, (confirming || !cardDetails?.complete) && ce.payBtnDisabled]}
@@ -1651,6 +1705,22 @@ const s = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: '#E5E7EB',
     paddingVertical: 6,
   },
+
+  // Delivery method pills
+  deliveryRow: {
+    flexDirection: 'row', gap: 8, paddingLeft: 52, marginBottom: 10, flexWrap: 'wrap',
+  },
+  deliveryPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: '#F0FAF9', borderRadius: 20,
+    paddingHorizontal: 12, paddingVertical: 7,
+    borderWidth: 1.5, borderColor: 'transparent',
+  },
+  deliveryPillActive:   { backgroundColor: TEAL },
+  deliveryPillDisabled: { backgroundColor: '#F4F5F7' },
+  deliveryPillText:     { fontSize: 12, fontWeight: '600', color: TEAL },
+  deliveryPillTextActive:  { color: '#fff' },
+  deliveryPillTextDisabled:{ color: '#C4C9D4' },
 
   // Amount columns
   amountSection: {
@@ -2257,6 +2327,11 @@ const ce = StyleSheet.create({
   row: {
     flexDirection: 'row',
   },
+  switchRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginTop: 16,
+  },
+  switchLabel: { fontSize: 14, fontWeight: '600', color: '#374151' },
 
   payBtn: {
     backgroundColor: TEAL,

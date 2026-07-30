@@ -1,12 +1,14 @@
 import { useState, useEffect, useMemo } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  FlatList, ActivityIndicator, Modal,
+  FlatList, ActivityIndicator, Modal, Alert,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
-import { ArrowLeft, Search, UserPlus, ChevronRight, Pencil, Wallet, Smartphone, Building2 } from 'lucide-react-native'
+import { ArrowLeft, Search, UserPlus, ChevronRight, Pencil, Trash2, Wallet, Smartphone, Building2 } from 'lucide-react-native'
+import Toast from 'react-native-toast-message'
 import api from '../api/client'
+import Spinner from '../components/Spinner'
 
 const TEAL       = '#0E9E98'
 const TEAL_LIGHT = '#E6F7F7'
@@ -59,34 +61,13 @@ const DIAL_MAP = [
   { dial: '+220', flag: '🇬🇲', currency: 'GMD', name: 'Gambia' },
 ].sort((a, b) => b.dial.length - a.dial.length)
 
-function detectCountry(phone) {
-  const n = (phone || '').replace(/[\s\-()]/g, '')
-  return DIAL_MAP.find(c => n.startsWith(c.dial)) || { flag: '🌍', currency: '', name: '' }
-}
-
-function deliveryLabel(type) {
-  if (type === 'wave_transfer') return 'Wave Mobile Money'
-  if (type === 'cash_pickup')   return 'Cash Pickup'
-  return 'Wallet Transfer'
-}
-
-function extractRecipients(transactions) {
-  const seen = new Map()
-  for (const tx of transactions) {
-    const phone = tx.to_phone
-    if (!phone) continue
-    if (tx.type === 'top_up' || tx.type === 'receive') continue
-    if (!seen.has(phone)) {
-      const d = tx.extra_data || {}
-      seen.set(phone, {
-        phone,
-        name:     d.recipient_name || tx.to_phone,
-        currency: d.recv_currency  || '',
-        type:     tx.type,
-      })
-    }
+function detectCountry(phone, countryName) {
+  if (countryName) {
+    const byName = DIAL_MAP.find(c => c.name === countryName)
+    if (byName) return byName
   }
-  return Array.from(seen.values())
+  const n = (phone || '').replace(/[\s\-()]/g, '')
+  return DIAL_MAP.find(c => n.startsWith(c.dial)) || { flag: '🌍', currency: '', name: countryName || '' }
 }
 
 export default function RecipientsScreen() {
@@ -98,12 +79,81 @@ export default function RecipientsScreen() {
   const [loading, setLoading]           = useState(true)
   const [pickedRecipient, setPickedRecipient] = useState(null)
 
+  const [editingRecipient, setEditingRecipient] = useState(null)
+  const [editName, setEditName]         = useState('')
+  const [editNickname, setEditNickname] = useState('')
+  const [savingEdit, setSavingEdit]     = useState(false)
+  const [deleting, setDeleting]         = useState(false)
+
+  const mapRecipient = (r) => ({
+    id:           r.id,
+    phone:        r.phone_number,
+    full_name:    r.full_name || '',
+    nickname:     r.nickname || '',
+    name:         r.nickname || r.full_name || r.phone_number,
+    country_name: r.country_name,
+  })
+
   useEffect(() => {
-    api.get('wallet/transactions?page=1&limit=100')
-      .then(({ data }) => setRecipients(extractRecipients(data.transactions || [])))
+    api.get('user/recipients')
+      .then(({ data }) => setRecipients((data.recipients || []).map(mapRecipient)))
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [])
+
+  const openEdit = (r) => {
+    setEditingRecipient(r)
+    setEditName(r.full_name)
+    setEditNickname(r.nickname)
+  }
+  const closeEdit = () => setEditingRecipient(null)
+
+  const saveEdit = async () => {
+    if (!editName.trim())
+      return Toast.show({ type: 'error', text1: 'Enter a full name' })
+    setSavingEdit(true)
+    try {
+      await api.put(`user/recipients/${editingRecipient.id}`, {
+        full_name: editName.trim(),
+        nickname:  editNickname.trim(),
+      })
+      setRecipients(rs => rs.map(r => r.id === editingRecipient.id
+        ? mapRecipient({ ...r, phone_number: r.phone, full_name: editName.trim(), nickname: editNickname.trim() })
+        : r
+      ))
+      Toast.show({ type: 'success', text1: 'Recipient updated' })
+      closeEdit()
+    } catch (err) {
+      Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Failed to update recipient' })
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
+  const deleteRecipient = async () => {
+    setDeleting(true)
+    try {
+      await api.delete(`user/recipients/${editingRecipient.id}`)
+      setRecipients(rs => rs.filter(r => r.id !== editingRecipient.id))
+      Toast.show({ type: 'success', text1: 'Recipient deleted' })
+      closeEdit()
+    } catch (err) {
+      Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Failed to delete recipient' })
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const confirmDelete = () => {
+    Alert.alert(
+      'Delete recipient',
+      `Remove ${editingRecipient.name} from your saved recipients?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: deleteRecipient },
+      ]
+    )
+  }
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -116,19 +166,17 @@ export default function RecipientsScreen() {
   const confirmDelivery = (deliveryId) => {
     const r = pickedRecipient
     setPickedRecipient(null)
-    const country = detectCountry(r.phone)
     navigation.navigate('SendMoney', {
       to_phone:     r.phone,
-      country_name: country.name,
+      country_name: r.country_name,
       delivery:     deliveryId,
     })
   }
 
   const renderRecipient = ({ item: r }) => {
-    const country = detectCountry(r.phone)
+    const country = detectCountry(r.phone, r.country_name)
     const flag    = country.flag
-    const ccy     = r.currency || country.currency
-    const label   = deliveryLabel(r.type)
+    const ccy     = country.currency
     const hasName = r.name && r.name !== r.phone
 
     return (
@@ -144,16 +192,22 @@ export default function RecipientsScreen() {
           {hasName && (
             <Text style={s.phone} numberOfLines={1}>{r.phone}</Text>
           )}
-          <Text style={s.sub}>{label}</Text>
+          <Text style={s.sub}>{r.country_name}</Text>
         </View>
-        <Pencil size={16} color="#D1D5DB" style={{ marginLeft: 8 }} />
+        <TouchableOpacity
+          onPress={() => openEdit(r)}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          style={{ marginLeft: 8, padding: 4 }}
+        >
+          <Pencil size={16} color="#9CA3AF" />
+        </TouchableOpacity>
       </TouchableOpacity>
     )
   }
 
   // ── Delivery picker for the chosen recipient ──────────────────────────────
   const pc = pickedRecipient
-  const pcCountry = pc ? detectCountry(pc.phone) : null
+  const pcCountry = pc ? detectCountry(pc.phone, pc.country_name) : null
   const pcHasName = pc && pc.name && pc.name !== pc.phone
 
   return (
@@ -201,7 +255,7 @@ export default function RecipientsScreen() {
       ) : (
         <FlatList
           data={filtered}
-          keyExtractor={r => r.phone}
+          keyExtractor={r => r.id}
           renderItem={renderRecipient}
           ListHeaderComponent={
             filtered.length > 0
@@ -215,7 +269,7 @@ export default function RecipientsScreen() {
               <Text style={s.emptySub}>
                 {query
                   ? 'No match found. Try a different name or number.'
-                  : 'Recipients from your past transfers will appear here.'}
+                  : 'Recipients you save will appear here.'}
               </Text>
             </View>
           }
@@ -269,6 +323,58 @@ export default function RecipientsScreen() {
                 <ChevronRight size={18} color="#D1D5DB" />
               </TouchableOpacity>
             ))}
+
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Edit / delete recipient modal ── */}
+      <Modal
+        visible={!!editingRecipient}
+        animationType="slide"
+        transparent
+        onRequestClose={closeEdit}
+      >
+        <View style={m.overlay}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeEdit} />
+          <View style={[m.sheet, { paddingBottom: insets.bottom + 20 }]}>
+
+            <View style={m.handle} />
+            <Text style={m.question}>Edit recipient</Text>
+
+            <TextInput
+              style={e.input}
+              placeholder="Full name"
+              placeholderTextColor="#9CA3AF"
+              value={editName}
+              onChangeText={setEditName}
+            />
+            <TextInput
+              style={e.input}
+              placeholder="Nickname (optional)"
+              placeholderTextColor="#9CA3AF"
+              value={editNickname}
+              onChangeText={setEditNickname}
+            />
+
+            <TouchableOpacity
+              style={[e.saveBtn, savingEdit && { opacity: 0.7 }]}
+              onPress={saveEdit}
+              disabled={savingEdit}
+              activeOpacity={0.85}
+            >
+              {savingEdit ? <Spinner size="sm" color="#fff" /> : <Text style={e.saveBtnText}>Save changes</Text>}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[e.deleteBtn, deleting && { opacity: 0.7 }]}
+              onPress={confirmDelete}
+              disabled={deleting}
+              activeOpacity={0.85}
+            >
+              <Trash2 size={16} color="#DC2626" />
+              <Text style={e.deleteBtnText}>{deleting ? 'Deleting…' : 'Delete recipient'}</Text>
+            </TouchableOpacity>
 
           </View>
         </View>
@@ -375,4 +481,22 @@ const m = StyleSheet.create({
   },
   optionLabel: { fontSize: 15, fontWeight: '700', color: '#111' },
   optionSub:   { fontSize: 13, color: '#9CA3AF', marginTop: 2 },
+})
+
+const e = StyleSheet.create({
+  input: {
+    backgroundColor: '#F9FAFB', borderWidth: 1.5, borderColor: '#E5E7EB',
+    borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14,
+    fontSize: 15, color: '#111', marginBottom: 12,
+  },
+  saveBtn: {
+    backgroundColor: TEAL, borderRadius: 32, paddingVertical: 16,
+    alignItems: 'center', marginTop: 4, marginBottom: 10,
+  },
+  saveBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  deleteBtn: {
+    flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 14, borderRadius: 32, borderWidth: 1.5, borderColor: '#FEE2E2',
+  },
+  deleteBtnText: { color: '#DC2626', fontSize: 15, fontWeight: '700' },
 })

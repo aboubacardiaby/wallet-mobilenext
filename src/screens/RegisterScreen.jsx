@@ -8,45 +8,16 @@ import { useNavigation } from '@react-navigation/native'
 import Toast from 'react-native-toast-message'
 import { ArrowLeft, ArrowRight, Globe, CheckCircle } from 'lucide-react-native'
 import api from '../api/client'
+import useCountries from '../hooks/useCountries'
 import Spinner from '../components/Spinner'
 
-const SENDER_COUNTRIES = [
-  { name: 'United States',  flag: '🇺🇸', currency: 'USD', dial: '+1'   },
-  { name: 'Canada',         flag: '🇨🇦', currency: 'CAD', dial: '+1'   },
-  { name: 'France',         flag: '🇫🇷', currency: 'EUR', dial: '+33'  },
-  { name: 'United Kingdom', flag: '🇬🇧', currency: 'GBP', dial: '+44'  },
-  { name: 'Germany',        flag: '🇩🇪', currency: 'EUR', dial: '+49'  },
-  { name: 'Spain',          flag: '🇪🇸', currency: 'EUR', dial: '+34'  },
-  { name: 'Italy',          flag: '🇮🇹', currency: 'EUR', dial: '+39'  },
-  { name: 'Portugal',       flag: '🇵🇹', currency: 'EUR', dial: '+351' },
-  { name: 'Switzerland',    flag: '🇨🇭', currency: 'CHF', dial: '+41'  },
-  { name: 'Belgium',        flag: '🇧🇪', currency: 'EUR', dial: '+32'  },
-  { name: 'Netherlands',    flag: '🇳🇱', currency: 'EUR', dial: '+31'  },
-  { name: 'Sweden',         flag: '🇸🇪', currency: 'SEK', dial: '+46'  },
-  { name: 'Norway',         flag: '🇳🇴', currency: 'NOK', dial: '+47'  },
-]
-
-const RECEIVER_COUNTRIES = [
-  { name: 'Senegal',       flag: '🇸🇳', currency: 'XOF', dial: '+221' },
-  { name: "Côte d'Ivoire", flag: '🇨🇮', currency: 'XOF', dial: '+225' },
-  { name: 'Mali',          flag: '🇲🇱', currency: 'XOF', dial: '+223' },
-  { name: 'Guinea',        flag: '🇬🇳', currency: 'GNF', dial: '+224' },
-  { name: 'Burkina Faso',  flag: '🇧🇫', currency: 'XOF', dial: '+226' },
-  { name: 'Niger',         flag: '🇳🇪', currency: 'XOF', dial: '+227' },
-  { name: 'Togo',          flag: '🇹🇬', currency: 'XOF', dial: '+228' },
-  { name: 'Benin',         flag: '🇧🇯', currency: 'XOF', dial: '+229' },
-  { name: 'Cameroon',      flag: '🇨🇲', currency: 'XAF', dial: '+237' },
-  { name: 'Mauritania',    flag: '🇲🇷', currency: 'MRU', dial: '+222' },
-  { name: 'Gambia',        flag: '🇬🇲', currency: 'GMD', dial: '+220' },
-  { name: 'Guinea-Bissau', flag: '🇬🇼', currency: 'XOF', dial: '+245' },
-  { name: 'Nigeria',       flag: '🇳🇬', currency: 'NGN', dial: '+234' },
-  { name: 'Ghana',         flag: '🇬🇭', currency: 'GHS', dial: '+233' },
-  { name: 'Morocco',       flag: '🇲🇦', currency: 'MAD', dial: '+212' },
-  { name: 'Kenya',         flag: '🇰🇪', currency: 'KES', dial: '+254' },
-  { name: 'South Africa',  flag: '🇿🇦', currency: 'ZAR', dial: '+27'  },
-  { name: 'Egypt',         flag: '🇪🇬', currency: 'EGP', dial: '+20'  },
-  { name: 'Ethiopia',      flag: '🇪🇹', currency: 'ETB', dial: '+251' },
-  { name: 'Congo (DRC)',   flag: '🇨🇩', currency: 'CDF', dial: '+243' },
+// ISO codes curated per role — the country *data* (name/flag/dial/currency)
+// now comes from useCountries(); these lists just define which of those
+// countries are offered to senders (North America/Europe) vs receivers (Africa).
+const SENDER_CODES = ['US', 'CA', 'FR', 'GB', 'DE', 'ES', 'IT', 'PT', 'CH', 'BE']
+const RECEIVER_CODES = [
+  'SN', 'CI', 'ML', 'GN', 'BF', 'NE', 'TG', 'BJ', 'CM', 'MR',
+  'GM', 'GW', 'NG', 'GH', 'MA', 'KE', 'ZA', 'EG', 'ET', 'CD',
 ]
 
 const CURRENCY_SYMBOLS = {
@@ -85,8 +56,11 @@ export default function RegisterScreen() {
   const [fullName, setFullName] = useState('')
   const [phoneNumber, setPhoneNumber] = useState('')
   const [loading, setLoading] = useState(false)
+  const { countries: allCountries } = useCountries()
 
-  const countries = userType === 'sender' ? SENDER_COUNTRIES : RECEIVER_COUNTRIES
+  const senderCountries = SENDER_CODES.map(code => allCountries.find(c => c.code === code)).filter(Boolean)
+  const receiverCountries = RECEIVER_CODES.map(code => allCountries.find(c => c.code === code)).filter(Boolean)
+  const countries = userType === 'sender' ? senderCountries : receiverCountries
 
   const submit = async () => {
     if (!fullName.trim()) return Toast.show({ type: 'error', text1: 'Enter your full name' })
@@ -136,7 +110,7 @@ export default function RegisterScreen() {
           style={s.roleCard}
           onPress={() => {
             setUserType('sender')
-            const detected = getDeviceCountry(SENDER_COUNTRIES)
+            const detected = getDeviceCountry(senderCountries)
             if (detected) setSelectedCountry(detected)
             setStep(1)
           }}

@@ -7,14 +7,18 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
 import Toast from 'react-native-toast-message'
 import * as ImagePicker from 'expo-image-picker'
+import * as DocumentPicker from 'expo-document-picker'
 import {
   ArrowLeft, ShieldCheck, ShieldX, Clock, CheckCircle,
   ChevronRight, ChevronLeft, User, CreditCard, Camera, Upload,
 } from 'lucide-react-native'
 import api from '../api/client'
-import COUNTRIES from '../data/countries'
+import useCountries from '../hooks/useCountries'
+import useRegions from '../hooks/useRegions'
 import { useAuth } from '../context/AuthContext'
 import Spinner from '../components/Spinner'
+import CountrySelect from '../components/CountrySelect'
+import RegionSelect from '../components/RegionSelect'
 
 const ID_TYPES = [
   { value: 'national_id',     label: 'National ID Card' },
@@ -28,6 +32,7 @@ export default function KYCScreen() {
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
   const { user, refreshProfile } = useAuth()
+  const { countries } = useCountries()
 
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -36,7 +41,7 @@ export default function KYCScreen() {
 
   const [form, setForm] = useState({
     full_name: user?.full_name || '', date_of_birth: '',
-    nationality: COUNTRIES[0].name, address: '', city: '', country: COUNTRIES[0].name,
+    nationality: countries[0].name, address: '', city: '', region: '', country: countries[0].name,
     id_type: 'national_id', id_number: '', id_expiry: '',
     id_front_url: '', id_back_url: '', selfie_url: '',
   })
@@ -116,7 +121,7 @@ export default function KYCScreen() {
       <Text style={s.stepLabel}>{STEPS[step]}</Text>
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
-        {step === 0 && <StepPersonal form={form} set={set} />}
+        {step === 0 && <StepPersonal form={form} set={set} countries={countries} />}
         {step === 1 && <StepDocument form={form} set={set} />}
         {step === 2 && <StepPhotos form={form} set={set} />}
         {step === 3 && <StepReview form={form} />}
@@ -144,7 +149,10 @@ export default function KYCScreen() {
   )
 }
 
-function StepPersonal({ form, set }) {
+function StepPersonal({ form, set, countries }) {
+  const countryCode = countries.find(c => c.name === form.country)?.code
+  const { regions } = useRegions(countryCode)
+
   return (
     <View style={{ gap: 12 }}>
       <Field label="Full legal name *">
@@ -154,23 +162,29 @@ function StepPersonal({ form, set }) {
         <TextInput style={sF.input} placeholder="YYYY-MM-DD" placeholderTextColor="#9CA3AF" value={form.date_of_birth} onChangeText={v => set('date_of_birth', v)} />
       </Field>
       <Field label="Nationality *">
-        <TextInput style={sF.input} placeholder="Country" placeholderTextColor="#9CA3AF" value={form.nationality} onChangeText={v => set('nationality', v)} />
+        <CountrySelect options={countries} value={form.nationality} onChange={c => set('nationality', c.name)} placeholder="Select nationality" />
       </Field>
       <Field label="Residential address *">
         <TextInput style={sF.input} placeholder="Street address" placeholderTextColor="#9CA3AF" value={form.address} onChangeText={v => set('address', v)} />
       </Field>
-      <View style={{ flexDirection: 'row', gap: 10 }}>
-        <View style={{ flex: 1 }}>
-          <Field label="City *">
-            <TextInput style={sF.input} placeholder="City" placeholderTextColor="#9CA3AF" value={form.city} onChangeText={v => set('city', v)} />
-          </Field>
-        </View>
-        <View style={{ flex: 1 }}>
-          <Field label="Country *">
-            <TextInput style={sF.input} placeholder="Country" placeholderTextColor="#9CA3AF" value={form.country} onChangeText={v => set('country', v)} />
-          </Field>
-        </View>
-      </View>
+      <Field label="Country *">
+        <CountrySelect
+          options={countries}
+          value={form.country}
+          onChange={c => { set('country', c.name); set('region', '') }}
+          placeholder="Select country"
+        />
+      </Field>
+      <Field label="Region / State / Province">
+        {regions.length > 0 ? (
+          <RegionSelect options={regions} value={form.region} onChange={r => set('region', r.name)} placeholder="Select region" />
+        ) : (
+          <TextInput style={sF.input} placeholder="Region / State / Province" placeholderTextColor="#9CA3AF" value={form.region} onChangeText={v => set('region', v)} />
+        )}
+      </Field>
+      <Field label="City *">
+        <TextInput style={sF.input} placeholder="City" placeholderTextColor="#9CA3AF" value={form.city} onChangeText={v => set('city', v)} />
+      </Field>
     </View>
   )
 }
@@ -216,7 +230,7 @@ function StepReview({ form }) {
         <ReviewRow label="Full name" value={form.full_name} />
         <ReviewRow label="Date of birth" value={form.date_of_birth} />
         <ReviewRow label="Nationality" value={form.nationality} />
-        <ReviewRow label="Address" value={`${form.address}, ${form.city}, ${form.country}`} />
+        <ReviewRow label="Address" value={[form.address, form.city, form.region, form.country].filter(Boolean).join(', ')} />
       </View>
       <View style={sF.reviewCard}>
         <ReviewRow label="Document" value={idLabel} />
@@ -238,8 +252,25 @@ function StepReview({ form }) {
   )
 }
 
+// Converts a local file URI (from the document picker) into a base64 data
+// URI, the same shape ImagePicker's `base64: true` option returns.
+async function uriToDataUri(uri, fallbackMimeType) {
+  const blob = await (await fetch(uri)).blob()
+  const dataUri = await new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = reject
+    reader.onload = () => resolve(reader.result)
+    reader.readAsDataURL(blob)
+  })
+  if (dataUri.startsWith('data:image/')) return dataUri
+  // Some local file:// blobs don't carry a usable mime type — rebuild the
+  // data URI using the type the document picker reported.
+  const base64 = dataUri.split(',')[1] || ''
+  return `data:${fallbackMimeType || 'image/jpeg'};base64,${base64}`
+}
+
 function PhotoUploader({ label, value, onChange, hint, selfie }) {
-  const pick = async () => {
+  const pickFromLibrary = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
     if (status !== 'granted') {
       Toast.show({ type: 'error', text1: 'Camera roll permission required' })
@@ -256,6 +287,25 @@ function PhotoUploader({ label, value, onChange, hint, selfie }) {
     }
   }
 
+  const pickFromFiles = async () => {
+    const result = await DocumentPicker.getDocumentAsync({ type: 'image/*', copyToCacheDirectory: true })
+    if (result.canceled || !result.assets?.[0]) return
+    try {
+      const dataUri = await uriToDataUri(result.assets[0].uri, result.assets[0].mimeType)
+      onChange(dataUri)
+    } catch {
+      Toast.show({ type: 'error', text1: 'Could not read that file' })
+    }
+  }
+
+  const pick = () => {
+    Alert.alert(label, 'Choose how to add this photo', [
+      { text: 'Choose from Photos', onPress: pickFromLibrary },
+      { text: 'Choose from Files', onPress: pickFromFiles },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
+
   return (
     <View>
       <Text style={sF.photoLabel}>{label}</Text>
@@ -268,7 +318,7 @@ function PhotoUploader({ label, value, onChange, hint, selfie }) {
         ) : (
           <View style={{ alignItems: 'center', gap: 6 }}>
             <Upload size={22} color="#9CA3AF" />
-            <Text style={{ fontSize: 13, fontWeight: '500', color: '#6B7280' }}>Tap to upload or take photo</Text>
+            <Text style={{ fontSize: 13, fontWeight: '500', color: '#6B7280' }}>Tap to upload from photos or files</Text>
             {hint && <Text style={{ fontSize: 11, color: '#D1D5DB' }}>{hint}</Text>}
           </View>
         )}
