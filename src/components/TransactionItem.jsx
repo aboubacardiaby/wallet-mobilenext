@@ -8,6 +8,14 @@ const TYPE_CONFIG = {
   cash_out: { icon: Banknote,        color: '#F97316', bg: '#FFF7ED', sign: '-', label: 'Cash Out' },
 }
 
+const STATUS_CONFIG = {
+  completed: { bg: '#F0FDF4', color: '#16A34A' },
+  pending:   { bg: '#FEFCE8', color: '#CA8A04' },
+  processing:{ bg: '#FEFCE8', color: '#CA8A04' },
+  failed:    { bg: '#FEF2F2', color: '#EF4444' },
+  rejected:  { bg: '#FEF2F2', color: '#EF4444' },
+}
+
 export default function TransactionItem({ tx, userId, onPress }) {
   const isDebit = tx.from_user_id === userId || tx.type === 'send' || tx.type === 'cash_out'
   const cfg = TYPE_CONFIG[tx.type] ?? TYPE_CONFIG.receive
@@ -18,6 +26,7 @@ export default function TransactionItem({ tx, userId, onPress }) {
   const date = new Date(tx.created_at).toLocaleDateString('en', {
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   })
+  const statusCfg = STATUS_CONFIG[tx.status] ?? STATUS_CONFIG.pending
 
   return (
     <TouchableOpacity style={s.row} onPress={onPress} activeOpacity={onPress ? 0.7 : 1}>
@@ -33,8 +42,8 @@ export default function TransactionItem({ tx, userId, onPress }) {
           {sign}{Number(tx.amount).toLocaleString()}{' '}
           <Text style={s.currency}>{tx.currency}</Text>
         </Text>
-        <View style={[s.badge, tx.status === 'completed' ? s.badgeGreen : s.badgeYellow]}>
-          <Text style={[s.badgeText, tx.status === 'completed' ? s.badgeTextGreen : s.badgeTextYellow]}>
+        <View style={[s.badge, { backgroundColor: statusCfg.bg }]}>
+          <Text style={[s.badgeText, { color: statusCfg.color }]}>
             {tx.status}
           </Text>
         </View>
@@ -54,9 +63,5 @@ const s = StyleSheet.create({
   amount:       { fontSize: 14, fontWeight: '700' },
   currency:     { fontSize: 11, fontWeight: '400' },
   badge:        { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 999, marginTop: 3 },
-  badgeGreen:   { backgroundColor: '#F0FDF4' },
-  badgeYellow:  { backgroundColor: '#FEFCE8' },
-  badgeText:    { fontSize: 10, textTransform: 'capitalize' },
-  badgeTextGreen:  { color: '#16A34A' },
-  badgeTextYellow: { color: '#CA8A04' },
+  badgeText:    { fontSize: 10, fontWeight: '700', textTransform: 'capitalize' },
 })

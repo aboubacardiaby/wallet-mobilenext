@@ -11,13 +11,14 @@ import { ArrowLeft, CreditCard, Building2, Star, Trash2, Plus, X, Smartphone } f
 import api from '../api/client'
 import Spinner from '../components/Spinner'
 import { useAuth } from '../context/AuthContext'
+import { getWalletProvidersForCountry, getProviderById } from '../data/walletProviders'
 
 const BRAND_LOGO = {
   visa:       { text: 'VISA', bg: '#1D4ED8', fg: '#fff' },
   mastercard: { text: 'MC',   bg: '#DC2626', fg: '#fff' },
   amex:       { text: 'AMEX', bg: '#2563EB', fg: '#fff' },
   discover:   { text: 'DISC', bg: '#EA580C', fg: '#fff' },
-  unknown:    { text: '💳',   bg: '#E5E7EB', fg: '#374151' },
+  unknown:    { text: '•••',   bg: '#E5E7EB', fg: '#374151' },
 }
 
 // CardField's `cardStyle` prop is native-only config, not RN's `style` — it
@@ -33,11 +34,12 @@ const CARD_FIELD_STYLE = {
 }
 
 const BASE_FORM_TABS = [
-  { id: 'card',       label: 'Card',       icon: '💳' },
-  { id: 'ach',        label: 'Bank (ACH)', icon: '🏛️' },
-  { id: 'paypal',     label: 'PayPal',     icon: '🅿️' },
-  { id: 'apple_pay',  label: 'Apple Pay',  icon: '🍎' },
-  { id: 'google_pay', label: 'Google Pay', icon: '🇬' },
+  { id: 'card',        label: 'Card',        icon: '💳' },
+  { id: 'ach',         label: 'Bank (ACH)',  icon: '🏛️' },
+  { id: 'paypal',      label: 'PayPal',      icon: '🅿️' },
+  { id: 'mobile_wallet', label: 'Mobile Money', icon: '📱' },
+  { id: 'apple_pay',   label: 'Apple Pay',   icon: '🍎' },
+  { id: 'google_pay',  label: 'Google Pay',  icon: '🇬' },
 ]
 
 function mapStripeBrand(brand) {
@@ -128,6 +130,7 @@ export default function PaymentMethodsScreen() {
                 {activeTab === 'card' && <AddCardForm onDone={() => { setShowAdd(false); load() }} />}
                 {activeTab === 'ach'  && <AddACHForm onDone={() => { setShowAdd(false); load() }} />}
                 {activeTab === 'paypal' && <AddPayPalForm onDone={() => { setShowAdd(false); load() }} />}
+                {activeTab === 'mobile_wallet' && <AddMobileWalletForm userCountry={user?.country || user?.home_country} onDone={() => { setShowAdd(false); load() }} />}
                 {(activeTab === 'apple_pay' || activeTab === 'google_pay') && <AddDigitalWalletForm type={activeTab} onDone={() => { setShowAdd(false); load() }} />}
               </View>
             )}
@@ -142,6 +145,7 @@ export default function PaymentMethodsScreen() {
         ) : null}
         renderItem={({ item: m }) => {
           const brand = BRAND_LOGO[m.card_brand] || BRAND_LOGO.unknown
+          const walletProvider = getProviderById(m.type)
           return (
             <View style={[s.methodCard, m.is_default && s.methodCardDefault]}>
               {m.type === 'card' ? (
@@ -152,15 +156,29 @@ export default function PaymentMethodsScreen() {
                 <View style={s.iconBadge}>
                   {m.type === 'ach' || m.type === 'bank_transfer'
                     ? <Building2 size={16} color="#374151" />
-                    : <Smartphone size={16} color="#374151" />}
+                    : walletProvider
+                      ? <Text style={{ fontSize: 16 }}>{walletProvider.icon}</Text>
+                      : <Smartphone size={16} color="#374151" />}
                 </View>
               )}
               <View style={{ flex: 1 }}>
-                <Text style={s.methodLabel}>{m.label}</Text>
+                <Text style={s.methodLabel}>{walletProvider?.name || m.label}</Text>
                 {m.type === 'card' && m.expiry_month && (
                   <Text style={s.methodExpiry}>Expires {String(m.expiry_month).padStart(2, '0')}/{m.expiry_year}</Text>
                 )}
-                {m.is_default && <Text style={s.defaultBadge}>Default</Text>}
+                {m.is_default && (
+                  <View style={s.defaultBadge}>
+                    <Star size={10} color="#4F46E5" />
+                    <Text style={s.defaultBadgeText}>Default</Text>
+                  </View>
+                )}
+                {(m.fee != null || m.limit != null) && (
+                  <Text style={s.methodMeta}>
+                    {m.fee != null && m.fee}
+                    {m.fee != null && m.limit != null && ' · '}
+                    {m.limit != null && m.limit}
+                  </Text>
+                )}
               </View>
               <View style={{ flexDirection: 'row', gap: 6 }}>
                 {!m.is_default && (
@@ -405,6 +423,75 @@ function AddDigitalWalletForm({ type, onDone }) {
   )
 }
 
+function AddMobileWalletForm({ userCountry, onDone }) {
+  const [providerId, setProviderId] = useState('')
+  const [accountNumber, setAccountNumber] = useState('')
+  const [isDefault, setIsDefault] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  const providers = getWalletProvidersForCountry(userCountry)
+
+  useEffect(() => {
+    if (providers.length && !providerId) setProviderId(providers[0].id)
+  }, [providers, providerId])
+
+  const submit = async () => {
+    const provider = getProviderById(providerId)
+    if (!provider) return Toast.show({ type: 'error', text1: 'Select a mobile wallet provider' })
+    setSaving(true)
+    try {
+      await api.post(provider.paymentEndpoint, {
+        type: provider.id,
+        account_number: accountNumber.trim() || undefined,
+        set_default: isDefault,
+      })
+      Toast.show({ type: 'success', text1: `${provider.name} linked!` })
+      onDone()
+    } catch (err) {
+      Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Failed to link wallet' })
+    } finally { setSaving(false) }
+  }
+
+  if (!providers.length) {
+    return (
+      <View style={sF.infoBanner}>
+        <Text style={{ fontSize: 20 }}>📱</Text>
+        <Text style={sF.infoText}>No mobile money providers are available in {userCountry || 'your country'} yet.</Text>
+      </View>
+    )
+  }
+
+  return (
+    <View style={{ gap: 10 }}>
+      <Text style={sF.inputLabel}>Provider</Text>
+      <View style={sF.providerRow}>
+        {providers.map(p => (
+          <TouchableOpacity
+            key={p.id}
+            style={[sF.providerPill, providerId === p.id && sF.providerPillActive]}
+            onPress={() => setProviderId(p.id)}
+            activeOpacity={0.8}
+          >
+            <Text style={{ fontSize: 16 }}>{p.icon}</Text>
+            <Text style={[sF.providerPillText, providerId === p.id && sF.providerPillTextActive]}>{p.name}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      <TextInput
+        style={sF.input}
+        placeholder="Mobile money account / phone number (optional)"
+        placeholderTextColor="#9CA3AF"
+        value={accountNumber}
+        onChangeText={setAccountNumber}
+      />
+      <View style={sF.switchRow}><Text style={sF.switchLabel}>Set as default</Text><Switch value={isDefault} onValueChange={setIsDefault} trackColor={{ true: '#4F46E5' }} /></View>
+      <TouchableOpacity style={[sF.btn, saving && sF.btnDisabled]} onPress={submit} disabled={saving}>
+        {saving ? <Spinner size="sm" color="#fff" /> : <Text style={sF.btnText}>Link Wallet</Text>}
+      </TouchableOpacity>
+    </View>
+  )
+}
+
 const s = StyleSheet.create({
   container:    { flex: 1, backgroundColor: '#F9FAFB' },
   header:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 12 },
@@ -429,7 +516,9 @@ const s = StyleSheet.create({
   iconBadge:    { width: 44, height: 32, borderRadius: 8, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   methodLabel:  { fontSize: 14, fontWeight: '700', color: '#111827' },
   methodExpiry: { fontSize: 12, color: '#9CA3AF' },
-  defaultBadge: { fontSize: 10, fontWeight: '700', color: '#4F46E5', backgroundColor: '#EEF2FF', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 999, alignSelf: 'flex-start', marginTop: 3 },
+  methodMeta:   { fontSize: 11, color: '#6B7280', marginTop: 2 },
+  defaultBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#EEF2FF', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 999, alignSelf: 'flex-start', marginTop: 3 },
+  defaultBadgeText: { fontSize: 10, fontWeight: '700', color: '#4F46E5' },
   actionBtn:    { width: 32, height: 32, borderRadius: 10, backgroundColor: '#FEF9C3', alignItems: 'center', justifyContent: 'center' },
   empty:        { alignItems: 'center', paddingVertical: 40, gap: 8 },
   emptyText:    { fontSize: 14, color: '#9CA3AF' },
@@ -457,4 +546,10 @@ const sF = StyleSheet.create({
   segmentActive:{ backgroundColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 2, elevation: 1 },
   segmentText: { fontSize: 13, fontWeight: '600', color: '#9CA3AF' },
   segmentTextActive: { color: '#4F46E5' },
+  inputLabel:  { fontSize: 12, fontWeight: '700', color: '#6B7280', marginTop: 4 },
+  providerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  providerPill:{ flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#F9FAFB', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7, borderWidth: 1.5, borderColor: '#E5E7EB' },
+  providerPillActive:{ backgroundColor: '#4F46E5', borderColor: '#4F46E5' },
+  providerPillText:{ fontSize: 12, fontWeight: '600', color: '#111827' },
+  providerPillTextActive:{ color: '#fff' },
 })

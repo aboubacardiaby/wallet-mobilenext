@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  ScrollView, RefreshControl, Dimensions,
+  ScrollView, RefreshControl, Dimensions, Alert,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
@@ -9,12 +9,14 @@ import Toast from 'react-native-toast-message'
 import {
   Send, Download, ArrowDownToLine, Banknote,
   Eye, EyeOff, TrendingUp, QrCode,
-  Bell, ArrowUpRight, ArrowDownLeft,
+  Bell, ArrowUpRight, ArrowDownLeft, HelpCircle,
 } from 'lucide-react-native'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import TransactionItem from '../components/TransactionItem'
 import Spinner from '../components/Spinner'
+import Skeleton from '../components/Skeleton'
+import EmptyState from '../components/EmptyState'
 
 const { width: SCREEN_W } = Dimensions.get('window')
 
@@ -39,6 +41,13 @@ function getGreeting() {
   return 'Good evening'
 }
 
+function formatTime(d) {
+  if (!d) return ''
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+const PENDING_STATUS = new Set(['pending', 'processing'])
+
 export default function DashboardScreen() {
   const navigation  = useNavigation()
   const insets      = useSafeAreaInsets()
@@ -50,6 +59,7 @@ export default function DashboardScreen() {
   const [loadingTxs, setLoadingTxs]   = useState(true)
   const [hideBalance, setHideBalance] = useState(false)
   const [ticker, setTicker]           = useState(null)
+  const [tickerAt, setTickerAt]       = useState(null)
   const [refreshing, setRefreshing]   = useState(false)
 
   const fetchWallet = async () => {
@@ -73,6 +83,7 @@ export default function DashboardScreen() {
       const { data } = await api.get('exchange/rates?base=XOF&popular_only=true')
       const picks = ['EUR', 'USD', 'GBP']
       setTicker(picks.map(code => ({ code, rate: data.rates[code] })).filter(x => x.rate))
+      setTickerAt(new Date())
     } catch { /* silent */ }
   }
 
@@ -95,6 +106,9 @@ export default function DashboardScreen() {
     ? '••••••'
     : balance.toLocaleString(undefined, { maximumFractionDigits: 2 })
 
+  const pendingTxs = txs.filter(t => PENDING_STATUS.has(t.status))
+  const recentTxs  = txs.filter(t => !PENDING_STATUS.has(t.status))
+
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: '#F4F6F9' }}
@@ -112,13 +126,24 @@ export default function DashboardScreen() {
         <View style={s.topRow}>
           <View>
             <Text style={s.greeting}>{getGreeting()}</Text>
-            <Text style={s.userName}>{firstName} 👋</Text>
+            <Text style={s.userName}>{firstName}</Text>
           </View>
           <View style={s.topActions}>
             <TouchableOpacity
               style={s.iconBtn}
+              onPress={() => Alert.alert('Help & Support', 'Our help center and FAQs are coming soon. For urgent issues, contact your support team.')}
+              activeOpacity={0.8}
+              accessibilityLabel="Help and support"
+              accessibilityRole="button"
+            >
+              <HelpCircle size={18} color="#fff" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={s.iconBtn}
               onPress={() => navigation.navigate('Notifications')}
               activeOpacity={0.8}
+              accessibilityLabel="Notifications"
+              accessibilityRole="button"
             >
               <Bell size={18} color="#fff" />
             </TouchableOpacity>
@@ -126,6 +151,8 @@ export default function DashboardScreen() {
               style={s.avatarBtn}
               onPress={() => navigation.navigate('Profile')}
               activeOpacity={0.8}
+              accessibilityLabel="Profile"
+              accessibilityRole="button"
             >
               <Text style={s.avatarText}>{initials}</Text>
             </TouchableOpacity>
@@ -134,18 +161,22 @@ export default function DashboardScreen() {
 
         {/* Balance card */}
         <View style={s.balanceCard}>
-          <View style={s.balanceCardTop}>
+          <TouchableOpacity
+            style={s.balanceCardTop}
+            onPress={() => setHideBalance(h => !h)}
+            activeOpacity={1}
+          >
             <Text style={s.balanceLabel}>Total Balance</Text>
-            <TouchableOpacity onPress={() => setHideBalance(h => !h)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <View style={s.eyeBtn}>
               {hideBalance
-                ? <EyeOff size={16} color="rgba(255,255,255,0.5)" />
-                : <Eye    size={16} color="rgba(255,255,255,0.5)" />
+                ? <EyeOff size={18} color="rgba(255,255,255,0.6)" />
+                : <Eye    size={18} color="rgba(255,255,255,0.6)" />
               }
-            </TouchableOpacity>
-          </View>
+            </View>
+          </TouchableOpacity>
 
           {loadingWallet
-            ? <View style={{ height: 52, justifyContent: 'center' }}><Spinner color="rgba(255,255,255,0.6)" /></View>
+            ? <View style={{ height: 52, justifyContent: 'center' }}><Skeleton width={180} height={28} color="rgba(255,255,255,0.15)" shimmerColor="rgba(255,255,255,0.25)" /></View>
             : <View style={s.balanceRow}>
                 <Text style={s.balanceAmount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>
                   {balanceDisplay}
@@ -225,7 +256,7 @@ export default function DashboardScreen() {
         </View>
       </View>
 
-      {/* ── Rate ticker ──  */}
+      {/* ── Rate ticker ── */}
       {ticker && ticker.length > 0 && (
         <View style={s.px}>
           <TouchableOpacity
@@ -235,7 +266,7 @@ export default function DashboardScreen() {
           >
             <View style={s.tickerLeft}>
               <TrendingUp size={16} color={TEAL} />
-              <Text style={s.tickerTitle}>Live Rates</Text>
+              <Text style={s.tickerTitle}>Live exchange rates</Text>
             </View>
             <View style={s.tickerRates}>
               {ticker.map(({ code, rate }) => (
@@ -247,8 +278,28 @@ export default function DashboardScreen() {
                 </View>
               ))}
             </View>
-            <Text style={s.tickerCta}>per XOF →</Text>
+            <Text style={s.tickerCta}>Updated {formatTime(tickerAt)}</Text>
           </TouchableOpacity>
+        </View>
+      )}
+
+      {/* ── Pending transactions ── */}
+      {!loadingTxs && pendingTxs.length > 0 && (
+        <View style={[s.section, s.px]}>
+          <View style={s.sectionHeader}>
+            <Text style={s.sectionTitle}>In Progress</Text>
+            <TouchableOpacity onPress={() => navigation.navigate('Transactions')} activeOpacity={0.7}>
+              <Text style={s.seeAll}>See all</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={s.txCard}>
+            {pendingTxs.map((tx, i) => (
+              <View key={tx.id}>
+                {i > 0 && <View style={s.txDivider} />}
+                <TransactionItem tx={tx} userId={user?.id} />
+              </View>
+            ))}
+          </View>
         </View>
       )}
 
@@ -262,14 +313,21 @@ export default function DashboardScreen() {
         </View>
         <View style={s.txCard}>
           {loadingTxs
-            ? <View style={{ paddingVertical: 28, alignItems: 'center' }}><Spinner color={TEAL} /></View>
-            : txs.length === 0
-              ? <View style={s.emptyWrap}>
-                  <Text style={s.emptyIcon}>💸</Text>
-                  <Text style={s.emptyText}>No transactions yet</Text>
-                  <Text style={s.emptySub}>Your transfer history will appear here</Text>
-                </View>
-              : txs.map((tx, i) => (
+            ? (
+              <View style={{ padding: 20, gap: 12 }}>
+                <Skeleton width={SCREEN_W - 72} height={56} borderRadius={14} />
+                <Skeleton width={SCREEN_W - 72} height={56} borderRadius={14} />
+                <Skeleton width={SCREEN_W - 72} height={56} borderRadius={14} />
+              </View>
+            ) : txs.length === 0
+              ? <EmptyState
+                  icon={Send}
+                  title="No transactions yet"
+                  sub="Your transfer history will appear here"
+                  cta="Send your first transfer"
+                  onCta={() => navigation.navigate('SendMoney')}
+                />
+              : recentTxs.map((tx, i) => (
                   <View key={tx.id}>
                     {i > 0 && <View style={s.txDivider} />}
                     <TransactionItem tx={tx} userId={user?.id} />
@@ -303,13 +361,13 @@ const s = StyleSheet.create({
 
   topActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   iconBtn: {
-    width: 40, height: 40, borderRadius: 13,
+    width: 44, height: 44, borderRadius: 13,
     backgroundColor: 'rgba(255,255,255,0.1)',
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
   },
   avatarBtn: {
-    width: 40, height: 40, borderRadius: 13,
+    width: 44, height: 44, borderRadius: 13,
     backgroundColor: TEAL,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 2, borderColor: 'rgba(255,255,255,0.25)',
@@ -328,6 +386,7 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   balanceLabel:  { fontSize: 12, color: 'rgba(255,255,255,0.5)', fontWeight: '600', letterSpacing: 0.5 },
+  eyeBtn:        { padding: 6 },
   balanceRow:    { flexDirection: 'row', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' },
   balanceAmount: { fontSize: 40, fontWeight: '800', color: '#fff', letterSpacing: -1, flexShrink: 1 },
   balanceCcy:    { fontSize: 16, fontWeight: '600', color: 'rgba(255,255,255,0.55)' },
@@ -365,17 +424,17 @@ const s = StyleSheet.create({
     paddingHorizontal: GRID_PAD, gap: GRID_GAP,
   },
   quickItem: {
-    width: ITEM_W, alignItems: 'center', gap: 9,
+    width: ITEM_W, alignItems: 'center', gap: 10,
     backgroundColor: '#fff',
-    borderRadius: 18, paddingVertical: 16,
+    borderRadius: 18, paddingVertical: 20, paddingHorizontal: 8,
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6, elevation: 3,
   },
   quickIconWrap: {
-    width: 46, height: 46, borderRadius: 15,
+    width: 48, height: 48, borderRadius: 16,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1,
   },
-  quickLabel: { fontSize: 11, fontWeight: '700', color: '#374151' },
+  quickLabel: { fontSize: 12, fontWeight: '700', color: '#374151' },
 
   // Ticker
   tickerCard: {
@@ -390,9 +449,9 @@ const s = StyleSheet.create({
   tickerTitle: { fontSize: 12, fontWeight: '700', color: TEAL },
   tickerRates: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'center' },
   tickerItem:  { alignItems: 'center' },
-  tickerCode:  { fontSize: 10, color: '#9CA3AF', fontWeight: '600', marginBottom: 2 },
+  tickerCode:  { fontSize: 10, color: '#6B7280', fontWeight: '600', marginBottom: 2 },
   tickerRate:  { fontSize: 13, fontWeight: '800', color: '#111' },
-  tickerCta:   { fontSize: 11, color: TEAL, fontWeight: '700' },
+  tickerCta:   { fontSize: 10, color: '#6B7280', fontWeight: '600' },
 
   // Transactions
   txCard: {
@@ -404,7 +463,9 @@ const s = StyleSheet.create({
   txDivider: { height: 1, backgroundColor: '#F3F4F6', marginHorizontal: 16 },
 
   emptyWrap: { alignItems: 'center', paddingVertical: 36 },
-  emptyIcon: { fontSize: 40, marginBottom: 12 },
+  emptyIcon: { fontSize: 40, fontWeight: '800', color: '#D1D5DB', marginBottom: 12 },
   emptyText: { fontSize: 15, fontWeight: '700', color: '#374151', marginBottom: 6 },
-  emptySub:  { fontSize: 13, color: '#9CA3AF' },
+  emptySub:  { fontSize: 13, color: '#6B7280' },
+  emptyCta:  { marginTop: 14, backgroundColor: '#EEF2FF', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12 },
+  emptyCtaText: { fontSize: 13, fontWeight: '700', color: '#4F46E5' },
 })

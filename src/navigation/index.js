@@ -1,8 +1,10 @@
-import { NavigationContainer, useNavigation } from '@react-navigation/native'
+import { useState, useEffect } from 'react'
+import { NavigationContainer } from '@react-navigation/native'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { ActivityIndicator, View } from 'react-native'
 import { Home, ArrowLeftRight, TrendingUp, Bell, User } from 'lucide-react-native'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 
 import { useAuth } from '../context/AuthContext'
 
@@ -11,6 +13,7 @@ import LoginScreen        from '../screens/LoginScreen'
 import RegisterScreen     from '../screens/RegisterScreen'
 import VerifyOTPScreen    from '../screens/VerifyOTPScreen'
 import SetPINScreen       from '../screens/SetPINScreen'
+import OnboardingScreen   from '../screens/OnboardingScreen'
 
 // Main tab screens
 import DashboardScreen    from '../screens/DashboardScreen'
@@ -37,7 +40,6 @@ const INDIGO = '#4F46E5'
 const GRAY   = '#9CA3AF'
 
 function MainTabs() {
-  const navigation = useNavigation()
   return (
     <Tab.Navigator
       screenOptions={{
@@ -54,24 +56,31 @@ function MainTabs() {
       }}
     >
       <Tab.Screen name="Dashboard" component={DashboardScreen}
-        options={{ tabBarLabel: 'Home', tabBarIcon: ({ color, size }) => <Home size={size} color={color} /> }}
-        listeners={{ tabPress: (e) => { e.preventDefault(); navigation.navigate('SendMoney') } }} />
+        options={{ tabBarLabel: 'Home', tabBarAccessibilityLabel: 'Home tab', tabBarIcon: ({ color, size }) => <Home size={size} color={color} /> }} />
       <Tab.Screen name="Transactions" component={TransactionsScreen}
-        options={{ tabBarLabel: 'History', tabBarIcon: ({ color, size }) => <ArrowLeftRight size={size} color={color} /> }} />
+        options={{ tabBarLabel: 'History', tabBarAccessibilityLabel: 'History tab', tabBarIcon: ({ color, size }) => <ArrowLeftRight size={size} color={color} /> }} />
       <Tab.Screen name="Exchange" component={ExchangeScreen}
-        options={{ tabBarLabel: 'Exchange', tabBarIcon: ({ color, size }) => <TrendingUp size={size} color={color} /> }} />
+        options={{ tabBarLabel: 'Exchange', tabBarAccessibilityLabel: 'Exchange rates tab', tabBarIcon: ({ color, size }) => <TrendingUp size={size} color={color} /> }} />
       <Tab.Screen name="Notifications" component={NotificationsScreen}
-        options={{ tabBarLabel: 'Alerts', tabBarIcon: ({ color, size }) => <Bell size={size} color={color} /> }} />
+        options={{ tabBarLabel: 'Alerts', tabBarAccessibilityLabel: 'Notifications tab', tabBarIcon: ({ color, size }) => <Bell size={size} color={color} /> }} />
       <Tab.Screen name="Profile" component={ProfileScreen}
-        options={{ tabBarLabel: 'Profile', tabBarIcon: ({ color, size }) => <User size={size} color={color} /> }} />
+        options={{ tabBarLabel: 'Profile', tabBarAccessibilityLabel: 'Profile tab', tabBarIcon: ({ color, size }) => <User size={size} color={color} /> }} />
     </Tab.Navigator>
   )
 }
 
 export default function RootNavigator() {
   const { isAuthenticated, loading } = useAuth()
+  const [onboardingLoading, setOnboardingLoading] = useState(true)
+  const [hasSeenOnboarding, setHasSeenOnboarding] = useState(false)
 
-  if (loading) {
+  useEffect(() => {
+    AsyncStorage.getItem('has_seen_onboarding')
+      .then(v => setHasSeenOnboarding(v === '1'))
+      .finally(() => setOnboardingLoading(false))
+  }, [])
+
+  if (loading || onboardingLoading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' }}>
         <ActivityIndicator size="large" color={INDIGO} />
@@ -81,13 +90,14 @@ export default function RootNavigator() {
 
   return (
     <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName={isAuthenticated ? 'Main' : (hasSeenOnboarding ? 'Login' : 'Onboarding')}>
         {!isAuthenticated ? (
           <>
-            <Stack.Screen name="Login"     component={LoginScreen} />
-            <Stack.Screen name="Register"  component={RegisterScreen} />
-            <Stack.Screen name="VerifyOTP" component={VerifyOTPScreen} />
-            <Stack.Screen name="SetPIN"    component={SetPINScreen} />
+            <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+            <Stack.Screen name="Login"      component={LoginScreen} />
+            <Stack.Screen name="Register"   component={RegisterScreen} />
+            <Stack.Screen name="VerifyOTP"  component={VerifyOTPScreen} />
+            <Stack.Screen name="SetPIN"     component={SetPINScreen} />
           </>
         ) : (
           <>

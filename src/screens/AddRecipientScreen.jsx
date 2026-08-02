@@ -10,6 +10,7 @@ import {
   ArrowLeft, ChevronDown, ChevronRight,
   User, Phone, Shield, Zap, Send,
 } from 'lucide-react-native'
+import { Haptics } from '../utils/haptics'
 import api from '../api/client'
 import Spinner from '../components/Spinner'
 
@@ -45,6 +46,12 @@ const PAYOUT_METHODS = [
   { id: 'cash',   label: 'Cash Pickup',     sub: 'Agent collection point' },
 ]
 
+const METHOD_TOOLTIPS = {
+  wallet: 'Recipient needs a Kalipeh wallet to receive USDC. If they do not have one, use Wave or Cash Pickup.',
+  wave:   'Money is sent to a Wave mobile money wallet in the recipient\'s local currency.',
+  cash:   'Recipient picks up cash at a nearby agent after receiving an SMS code.',
+}
+
 function FieldLabel({ text }) {
   return <Text style={s.fieldLabel}>{text}</Text>
 }
@@ -76,12 +83,18 @@ export default function AddRecipientScreen() {
   const payoutCurrency = method.id === 'wallet' ? 'USDC' : country.currency
 
   const save = async () => {
-    if (isWave && !fullName.trim())
+    if (isWave && !fullName.trim()) {
+      Haptics.error()
       return Toast.show({ type: 'error', text1: 'Enter recipient full name' })
-    if (!phone.trim())
+    }
+    if (!phone.trim()) {
+      Haptics.error()
       return Toast.show({ type: 'error', text1: 'Enter a mobile number' })
-    if (isWave && phone !== phoneConfirm)
+    }
+    if (isWave && phone !== phoneConfirm) {
+      Haptics.error()
       return Toast.show({ type: 'error', text1: 'Mobile numbers do not match' })
+    }
 
     setSaving(true)
     try {
@@ -94,6 +107,7 @@ export default function AddRecipientScreen() {
         country_name:  country.name,
         payout_method: method.id,
       })
+      Haptics.success()
       Toast.show({ type: 'success', text1: 'Recipient saved!' })
       navigation.navigate('SendMoney', {
         to_phone:     p,
@@ -101,6 +115,7 @@ export default function AddRecipientScreen() {
         delivery:     method.id,
       })
     } catch (err) {
+      Haptics.error()
       Toast.show({ type: 'error', text1: err.response?.data?.detail || 'Failed to save recipient' })
     } finally {
       setSaving(false)
@@ -158,6 +173,21 @@ export default function AddRecipientScreen() {
         showsVerticalScrollIndicator={false}
       >
 
+        {/* ── Step tracker ── */}
+        <View style={s.stepTrack}>
+          {['Method & country', walletOnly ? 'Mobile number' : 'Recipient details', 'Confirm'].map((label, i) => {
+            const active = i === 0 || (i === 1) || (i === 2 && phoneConfirm.length > 0)
+            return (
+              <View key={label} style={s.stepItem}>
+                <View style={[s.stepDot, active && s.stepDotActive]}>
+                  <Text style={[s.stepDotText, active && s.stepDotTextActive]}>{i + 1}</Text>
+                </View>
+                <Text style={[s.stepLabel, active && s.stepLabelActive]}>{label}</Text>
+              </View>
+            )
+          })}
+        </View>
+
         {/* ── Main card ── */}
         <View style={s.mainCard}>
 
@@ -191,6 +221,9 @@ export default function AddRecipientScreen() {
               <FieldLabel text="PAYOUT METHOD" />
               <Text style={[s.fieldValue, walletOnly && { color: TEAL }]}>{method.label}</Text>
               <Text style={s.fieldSub}>{method.sub}</Text>
+              <TouchableOpacity onPress={() => Alert.alert(method.label, METHOD_TOOLTIPS[method.id])} activeOpacity={0.7}>
+                <Text style={s.methodTip}>What's this?</Text>
+              </TouchableOpacity>
             </View>
             {!walletOnly && <ChevronDown size={16} color="#9CA3AF" />}
           </TouchableOpacity>
@@ -275,7 +308,12 @@ export default function AddRecipientScreen() {
                   />
                 </View>
                 {phoneConfirm.length > 0 && (
-                  <View style={[s.matchDot, { backgroundColor: phone === phoneConfirm ? TEAL : '#EF4444' }]} />
+                  <View style={{ alignItems: 'flex-end' }}>
+                    <View style={[s.matchDot, { backgroundColor: phone === phoneConfirm ? TEAL : '#EF4444' }]} />
+                    <Text style={{ fontSize: 11, color: phone === phoneConfirm ? TEAL : '#EF4444', marginTop: 4 }}>
+                      {phone === phoneConfirm ? 'Numbers match' : "Numbers don't match"}
+                    </Text>
+                  </View>
                 )}
               </View>
             </>
@@ -425,6 +463,16 @@ const s = StyleSheet.create({
 
   // ── Main card ────────────────────────────────────────────────────────────────
   content: { padding: 16, gap: 12 },
+
+  stepTrack:  { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 8, marginBottom: 4 },
+  stepItem:   { alignItems: 'center', gap: 6, flex: 1 },
+  stepDot:    { width: 28, height: 28, borderRadius: 14, backgroundColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  stepDotActive: { backgroundColor: TEAL },
+  stepDotText: { fontSize: 12, fontWeight: '800', color: '#6B7280' },
+  stepDotTextActive: { color: '#fff' },
+  stepLabel:  { fontSize: 11, color: '#9CA3AF', fontWeight: '600', textAlign: 'center' },
+  stepLabelActive: { color: TEAL },
+
   mainCard: {
     backgroundColor: '#fff',
     borderRadius: 20,
@@ -447,6 +495,7 @@ const s = StyleSheet.create({
   fieldLabel: { fontSize: 10, fontWeight: '700', color: '#9CA3AF', letterSpacing: 1.2, marginBottom: 4 },
   fieldValue: { fontSize: 15, fontWeight: '700', color: '#111' },
   fieldSub:   { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
+  methodTip:  { fontSize: 11, color: TEAL, fontWeight: '600', marginTop: 4 },
   fieldInput: { fontSize: 15, fontWeight: '600', color: '#111', paddingVertical: 0 },
 
   rowDivider: { height: 1, backgroundColor: '#F3F4F6', marginLeft: 72 },

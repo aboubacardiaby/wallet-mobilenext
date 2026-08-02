@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   View, Text, TouchableOpacity, StyleSheet,
   ScrollView, TextInput, FlatList, ActivityIndicator,
+  RefreshControl,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Toast from 'react-native-toast-message'
-import { ArrowLeftRight, RefreshCw, TrendingUp, Search } from 'lucide-react-native'
+import { ArrowLeftRight, RefreshCw, TrendingUp, TrendingDown, Search } from 'lucide-react-native'
 import api from '../api/client'
 import Spinner from '../components/Spinner'
 
@@ -49,6 +50,7 @@ function timeAgo(ts) {
 export default function ExchangeScreen() {
   const insets = useSafeAreaInsets()
   const [rates, setRates] = useState({})
+  const [prevRates, setPrevRates] = useState({})
   const [fetchedAt, setFetchedAt] = useState(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -63,6 +65,7 @@ export default function ExchangeScreen() {
     if (!silent) setLoading(true); else setRefreshing(true)
     try {
       const { data } = await api.get('exchange/rates?base=XOF&popular_only=true')
+      setPrevRates(rates)
       setRates(data.rates)
       setFetchedAt(data.fetched_at)
     } catch {
@@ -102,7 +105,10 @@ export default function ExchangeScreen() {
   )
 
   return (
-    <ScrollView style={[s.container, { paddingTop: insets.top }]}>
+    <ScrollView
+      style={[s.container, { paddingTop: insets.top }]}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadRates(true)} tintColor="#4F46E5" />}
+    >
       <View style={s.header}>
         <Text style={s.title}>Exchange Rates</Text>
         <View style={s.headerRight}>
@@ -174,6 +180,9 @@ export default function ExchangeScreen() {
           <View style={s.card}>
             {filtered.map((c, i) => {
               const rate = rates[c.code]
+              const prev = prevRates[c.code]
+              const change = prev != null ? rate - prev : 0
+              const Direction = change > 0 ? TrendingUp : change < 0 ? TrendingDown : null
               return (
                 <View key={c.code}>
                   {i > 0 && <View style={s.divider} />}
@@ -184,7 +193,12 @@ export default function ExchangeScreen() {
                       <Text style={s.rateName}>{c.name}</Text>
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={s.rateValue}>{rate !== undefined ? fmt(rate) : '—'}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={s.rateValue}>{rate !== undefined ? fmt(rate) : '—'}</Text>
+                        {Direction && (
+                          <Direction size={14} color={change > 0 ? '#16A34A' : '#DC2626'} />
+                        )}
+                      </View>
                       {rate && <Text style={s.rateInverse}>1 {c.code} = {fmt(1 / rate)} XOF</Text>}
                     </View>
                   </View>
@@ -253,17 +267,17 @@ const s = StyleSheet.create({
   updatedText:   { fontSize: 12, color: '#9CA3AF' },
   refreshBtn:    { padding: 4 },
   px:            { paddingHorizontal: 20 },
-  card:          { backgroundColor: '#fff', borderRadius: 20, padding: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
-  converterHeader:{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
-  converterTitle: { fontSize: 14, fontWeight: '600', color: '#111827' },
-  inputLabel:    { fontSize: 12, fontWeight: '500', color: '#6B7280', marginBottom: 6 },
+  card:          { backgroundColor: '#fff', borderRadius: 20, padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
+  converterHeader:{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 16 },
+  converterTitle: { fontSize: 16, fontWeight: '700', color: '#111827' },
+  inputLabel:    { fontSize: 13, fontWeight: '600', color: '#6B7280', marginBottom: 6 },
   converterRow:  { flexDirection: 'row', alignItems: 'center' },
-  input:         { backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11, fontSize: 14, color: '#111827' },
+  input:         { backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13, fontSize: 16, color: '#111827' },
   resultBox:     { backgroundColor: '#F9FAFB', justifyContent: 'center', alignItems: 'flex-end' },
-  resultText:    { fontSize: 14, fontWeight: '600', color: '#374151', fontFamily: 'monospace' },
-  swapRow:       { alignItems: 'center', marginVertical: 10 },
-  swapBtn:       { width: 36, height: 36, borderRadius: 18, backgroundColor: '#EEF2FF', borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' },
-  rateHint:      { fontSize: 12, color: '#9CA3AF', textAlign: 'center', marginTop: 8 },
+  resultText:    { fontSize: 18, fontWeight: '700', color: '#374151' },
+  swapRow:       { alignItems: 'center', marginVertical: 14 },
+  swapBtn:       { width: 40, height: 40, borderRadius: 20, backgroundColor: '#EEF2FF', borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  rateHint:      { fontSize: 13, color: '#9CA3AF', textAlign: 'center', marginTop: 10 },
   tableHeader:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   tableTitle:    { fontSize: 14, fontWeight: '700', color: '#111827' },
   searchBox:     { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#F3F4F6', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 6 },
@@ -271,9 +285,9 @@ const s = StyleSheet.create({
   divider:       { height: 1, backgroundColor: '#F9FAFB' },
   rateRow:       { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
   rateFlag:      { fontSize: 20, width: 28, textAlign: 'center' },
-  rateCode:      { fontSize: 14, fontWeight: '600', color: '#111827' },
-  rateName:      { fontSize: 12, color: '#9CA3AF' },
-  rateValue:     { fontSize: 14, fontWeight: '700', color: '#1F2937', fontFamily: 'monospace' },
-  rateInverse:   { fontSize: 11, color: '#9CA3AF' },
+  rateCode:      { fontSize: 15, fontWeight: '700', color: '#111827' },
+  rateName:      { fontSize: 13, color: '#6B7280' },
+  rateValue:     { fontSize: 16, fontWeight: '800', color: '#1F2937' },
+  rateInverse:   { fontSize: 13, color: '#9CA3AF', marginTop: 2 },
   disclaimer:    { fontSize: 11, color: '#D1D5DB', textAlign: 'center', marginTop: 12, marginBottom: 4 },
 })

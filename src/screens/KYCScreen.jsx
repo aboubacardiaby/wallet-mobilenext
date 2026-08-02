@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ScrollView, Alert, ActivityIndicator,
+  ScrollView, Alert, ActivityIndicator, Image, Modal,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
@@ -26,6 +26,21 @@ const ID_TYPES = [
   { value: 'drivers_license', label: "Driver's Licence" },
   { value: 'residence_permit',label: 'Residence Permit' },
 ]
+
+const DOC_HINTS = {
+  national_id: 'Upload the front and back of a government-issued national ID. Name, photo and number must be clearly visible.',
+  passport: 'Upload the photo page of your passport. Make sure the MRZ code and your photo are not blurred.',
+  drivers_license: 'Upload the front and back of a valid driver\'s licence. Expiry date and licence number must be readable.',
+  residence_permit: 'Upload the front and back of your residence permit. Both sides must be visible and in date.',
+}
+
+const DOC_EXAMPLES = {
+  national_id: ['Front of card', 'Back of card', 'Selfie with card'],
+  passport: ['Passport photo page', 'Selfie with passport'],
+  drivers_license: ['Front of licence', 'Back of licence', 'Selfie with licence'],
+  residence_permit: ['Front of permit', 'Back of permit', 'Selfie with permit'],
+}
+
 const STEPS = ['Personal Info', 'Document', 'Photos', 'Review']
 
 export default function KYCScreen() {
@@ -190,6 +205,8 @@ function StepPersonal({ form, set, countries }) {
 }
 
 function StepDocument({ form, set }) {
+  const hint = DOC_HINTS[form.id_type]
+  const examples = DOC_EXAMPLES[form.id_type]
   return (
     <View style={{ gap: 12 }}>
       <Field label="Document type *">
@@ -201,6 +218,19 @@ function StepDocument({ form, set }) {
           ))}
         </View>
       </Field>
+
+      <View style={sF.docHintCard}>
+        <Text style={sF.docHintTitle}>Accepted for this document</Text>
+        <Text style={sF.docHintText}>{hint}</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+          {examples.map(ex => (
+            <View key={ex} style={sF.docExamplePill}>
+              <Text style={sF.docExampleText}>{ex}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+
       <Field label="Document number *">
         <TextInput style={sF.input} placeholder="e.g. 1234567890" placeholderTextColor="#9CA3AF" value={form.id_number} onChangeText={v => set('id_number', v)} />
       </Field>
@@ -241,7 +271,9 @@ function StepReview({ form }) {
         {[{ url: form.id_front_url, label: 'Front' }, { url: form.id_back_url, label: 'Back' }, { url: form.selfie_url, label: 'Selfie' }].map(({ url, label }) => (
           <View key={label} style={sF.thumb}>
             <View style={[sF.thumbInner, url && { backgroundColor: '#E5E7EB' }]}>
-              {url ? <CheckCircle size={20} color="#16A34A" /> : <Upload size={20} color="#D1D5DB" />}
+              {url
+                ? <Image source={{ uri: url }} style={sF.thumbImage} resizeMode="cover" />
+                : <Upload size={20} color="#D1D5DB" />}
             </View>
             <Text style={sF.thumbLabel}>{label}</Text>
           </View>
@@ -270,6 +302,9 @@ async function uriToDataUri(uri, fallbackMimeType) {
 }
 
 function PhotoUploader({ label, value, onChange, hint, selfie }) {
+  const insets = useSafeAreaInsets()
+  const [showSheet, setShowSheet] = useState(false)
+
   const pickFromLibrary = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
     if (status !== 'granted') {
@@ -298,13 +333,10 @@ function PhotoUploader({ label, value, onChange, hint, selfie }) {
     }
   }
 
-  const pick = () => {
-    Alert.alert(label, 'Choose how to add this photo', [
-      { text: 'Choose from Photos', onPress: pickFromLibrary },
-      { text: 'Choose from Files', onPress: pickFromFiles },
-      { text: 'Cancel', style: 'cancel' },
-    ])
-  }
+  const pick = () => setShowSheet(true)
+  const closeSheet = () => setShowSheet(false)
+
+  const runAndClose = (fn) => async () => { closeSheet(); await fn() }
 
   return (
     <View>
@@ -323,6 +355,44 @@ function PhotoUploader({ label, value, onChange, hint, selfie }) {
           </View>
         )}
       </TouchableOpacity>
+
+      <Modal
+        visible={showSheet}
+        animationType="slide"
+        transparent
+        onRequestClose={closeSheet}
+      >
+        <View style={m.overlay}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeSheet} />
+          <View style={[m.sheet, { paddingBottom: insets.bottom + 20 }]}>
+            <View style={m.handle} />
+            <Text style={m.sheetTitle}>{label}</Text>
+            <Text style={m.sheetSub}>Choose how to add this photo</Text>
+
+            <TouchableOpacity style={m.option} onPress={runAndClose(pickFromLibrary)} activeOpacity={0.8}>
+              <Camera size={20} color="#4F46E5" />
+              <View style={{ flex: 1 }}>
+                <Text style={m.optionLabel}>Choose from Photos</Text>
+                <Text style={m.optionSub}>Pick an image from your camera roll</Text>
+              </View>
+              <ChevronRight size={18} color="#D1D5DB" />
+            </TouchableOpacity>
+
+            <TouchableOpacity style={m.option} onPress={runAndClose(pickFromFiles)} activeOpacity={0.8}>
+              <Upload size={20} color="#4F46E5" />
+              <View style={{ flex: 1 }}>
+                <Text style={m.optionLabel}>Choose from Files</Text>
+                <Text style={m.optionSub}>Upload a saved document or image</Text>
+              </View>
+              <ChevronRight size={18} color="#D1D5DB" />
+            </TouchableOpacity>
+
+            <TouchableOpacity style={m.cancel} onPress={closeSheet} activeOpacity={0.8}>
+              <Text style={m.cancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   )
 }
@@ -405,6 +475,19 @@ const s = StyleSheet.create({
   btnSecondaryText:{ fontSize: 15, fontWeight: '600', color: '#374151' },
 })
 
+const m = StyleSheet.create({
+  overlay:  { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+  sheet:    { backgroundColor: '#fff', borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingTop: 12, paddingHorizontal: 20, paddingBottom: 20 },
+  handle:   { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E5E7EB', alignSelf: 'center', marginBottom: 16 },
+  sheetTitle:{ fontSize: 18, fontWeight: '800', color: '#111827', marginBottom: 4 },
+  sheetSub: { fontSize: 13, color: '#9CA3AF', marginBottom: 16 },
+  option:   { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  optionLabel:{ fontSize: 15, fontWeight: '600', color: '#111827' },
+  optionSub:{ fontSize: 12, color: '#9CA3AF', marginTop: 2 },
+  cancel:   { paddingVertical: 16, alignItems: 'center', marginTop: 4 },
+  cancelText:{ fontSize: 15, fontWeight: '700', color: '#6B7280' },
+})
+
 const sF = StyleSheet.create({
   label:     { fontSize: 12, fontWeight: '500', color: '#6B7280', marginBottom: 6 },
   input:     { backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, fontSize: 14, color: '#111827' },
@@ -412,9 +495,15 @@ const sF = StyleSheet.create({
   typeBtnActive:{ borderColor: '#4F46E5', backgroundColor: '#EEF2FF' },
   typeBtnText:  { fontSize: 12, fontWeight: '500', color: '#6B7280' },
   typeBtnTextActive:{ color: '#4338CA' },
+  docHintCard:{ backgroundColor: '#F0FAF9', borderRadius: 16, padding: 14, borderLeftWidth: 4, borderLeftColor: '#0E9E98' },
+  docHintTitle:{ fontSize: 13, fontWeight: '700', color: '#0E9E98', marginBottom: 4 },
+  docHintText: { fontSize: 12, color: '#6B7280', lineHeight: 18 },
+  docExamplePill:{ backgroundColor: '#fff', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1, borderColor: '#C9EDE9' },
+  docExampleText:{ fontSize: 11, color: '#374151', fontWeight: '500' },
   reviewCard:{ backgroundColor: '#fff', borderRadius: 16, padding: 14, gap: 2 },
   thumb:     { flex: 1, alignItems: 'center', gap: 4 },
-  thumbInner:{ width: '100%', aspectRatio: 1.5, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  thumbInner:{ width: '100%', aspectRatio: 1.5, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  thumbImage:{ width: '100%', height: '100%' },
   thumbLabel:{ fontSize: 11, color: '#6B7280' },
   photoLabel:{ fontSize: 12, fontWeight: '500', color: '#6B7280', marginBottom: 6 },
   uploadBtn: { borderWidth: 2, borderColor: '#E5E7EB', borderStyle: 'dashed', borderRadius: 14, padding: 20, alignItems: 'center' },

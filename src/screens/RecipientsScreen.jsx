@@ -5,7 +5,7 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
-import { ArrowLeft, Search, UserPlus, ChevronRight, Pencil, Trash2, Wallet, Smartphone, Building2 } from 'lucide-react-native'
+import { ArrowLeft, Search, UserPlus, ChevronRight, Pencil, Trash2, Wallet, Smartphone, Building2, Star, Users } from 'lucide-react-native'
 import Toast from 'react-native-toast-message'
 import api from '../api/client'
 import Spinner from '../components/Spinner'
@@ -78,6 +78,8 @@ export default function RecipientsScreen() {
   const [recipients, setRecipients]     = useState([])
   const [loading, setLoading]           = useState(true)
   const [pickedRecipient, setPickedRecipient] = useState(null)
+  const [filter, setFilter]             = useState('all')
+  const [favorites, setFavorites]       = useState(new Set())
 
   const [editingRecipient, setEditingRecipient] = useState(null)
   const [editName, setEditName]         = useState('')
@@ -157,11 +159,29 @@ export default function RecipientsScreen() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return recipients
-    return recipients.filter(r =>
+    let out = recipients
+    if (filter === 'favorites') out = out.filter(r => favorites.has(r.id))
+    if (!q) return out
+    return out.filter(r =>
       r.name.toLowerCase().includes(q) || r.phone.includes(q)
     )
-  }, [query, recipients])
+  }, [query, recipients, filter, favorites])
+
+  const toggleFavorite = (id) => {
+    setFavorites(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const importContacts = () => {
+    Alert.alert(
+      'Import from Contacts',
+      'Contact import needs device permission and is not enabled in this build. Add recipients manually for now.'
+    )
+  }
 
   const confirmDelivery = (deliveryId) => {
     const r = pickedRecipient
@@ -179,6 +199,8 @@ export default function RecipientsScreen() {
     const ccy     = country.currency
     const hasName = r.name && r.name !== r.phone
 
+    const isFav = favorites.has(r.id)
+
     return (
       <TouchableOpacity style={s.row} onPress={() => setPickedRecipient(r)} activeOpacity={0.75}>
         <Text style={s.flag}>{flag}</Text>
@@ -195,9 +217,16 @@ export default function RecipientsScreen() {
           <Text style={s.sub}>{r.country_name}</Text>
         </View>
         <TouchableOpacity
+          onPress={(e) => { e.stopPropagation(); toggleFavorite(r.id) }}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          style={s.favBtn}
+        >
+          <Star size={16} color={isFav ? '#F59E0B' : '#D1D5DB'} fill={isFav ? '#F59E0B' : 'none'} />
+        </TouchableOpacity>
+        <TouchableOpacity
           onPress={() => openEdit(r)}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          style={{ marginLeft: 8, padding: 4 }}
+          style={{ marginLeft: 4, padding: 4 }}
         >
           <Pencil size={16} color="#9CA3AF" />
         </TouchableOpacity>
@@ -248,6 +277,35 @@ export default function RecipientsScreen() {
         <Text style={s.addText}>Add a new recipient</Text>
         <ChevronRight size={18} color={TEAL} />
       </TouchableOpacity>
+
+      {/* ── Import from contacts ── */}
+      <TouchableOpacity
+        style={s.importRow}
+        onPress={importContacts}
+        activeOpacity={0.8}
+      >
+        <View style={[s.addIcon, { backgroundColor: '#EEF2FF' }]}>
+          <Users size={20} color="#4F46E5" />
+        </View>
+        <Text style={[s.addText, { color: '#4F46E5' }]}>Import from contacts</Text>
+        <ChevronRight size={18} color="#4F46E5" />
+      </TouchableOpacity>
+
+      {/* ── Filter chips ── */}
+      <View style={s.filterRow}>
+        <TouchableOpacity
+          style={[s.filterChip, filter === 'all' && s.filterChipActive]}
+          onPress={() => setFilter('all')}
+        >
+          <Text style={[s.filterChipText, filter === 'all' && s.filterChipTextActive]}>All</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[s.filterChip, filter === 'favorites' && s.filterChipActive]}
+          onPress={() => setFilter('favorites')}
+        >
+          <Text style={[s.filterChipText, filter === 'favorites' && s.filterChipTextActive]}>Favorites</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* ── Recipient list ── */}
       {loading ? (
@@ -415,6 +473,22 @@ const s = StyleSheet.create({
     marginRight: 16,
   },
   addText: { flex: 1, fontSize: 16, fontWeight: '700', color: TEAL },
+  importRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 20, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: '#F3F4F6',
+  },
+  filterRow: {
+    flexDirection: 'row', gap: 8,
+    paddingHorizontal: 20, paddingVertical: 12,
+  },
+  filterChip: {
+    paddingHorizontal: 14, paddingVertical: 6,
+    borderRadius: 999, backgroundColor: '#F3F4F6',
+  },
+  filterChipActive: { backgroundColor: '#EEF2FF' },
+  filterChipText: { fontSize: 13, fontWeight: '600', color: '#6B7280' },
+  filterChipTextActive: { color: '#4F46E5' },
 
   sectionLabel: {
     fontSize: 11, fontWeight: '800', color: '#9CA3AF',
@@ -437,6 +511,7 @@ const s = StyleSheet.create({
   ccyText: { fontSize: 12, fontWeight: '700', color: '#374151' },
   phone:   { fontSize: 13, color: '#374151', marginBottom: 2 },
   sub:     { fontSize: 13, color: '#6B7280' },
+  favBtn:  { padding: 4, marginLeft: 'auto' },
 
   emptyWrap:  { alignItems: 'center', paddingTop: 60, paddingHorizontal: 40 },
   emptyIcon:  { fontSize: 48, marginBottom: 16 },

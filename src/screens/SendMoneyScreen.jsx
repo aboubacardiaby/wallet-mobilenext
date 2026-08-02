@@ -8,11 +8,13 @@ import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/nativ
 import { CardField, useStripe } from '@stripe/stripe-react-native'
 import Toast from 'react-native-toast-message'
 import { ChevronDown, UserPlus, CheckCircle, ArrowRight, Zap, Shield, Clock, Mail, Trash2, Plus, Home, ArrowLeftRight, TrendingUp, Bell, User, Wallet, Smartphone, Building2 } from 'lucide-react-native'
+import { Haptics } from '../utils/haptics'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import Spinner from '../components/Spinner'
-import { CURRENCY_SYMBOLS, fmt } from '../data/currencies'
+import { CURRENCY_SYMBOLS, fmt, getCurrencyByCountryName } from '../data/currencies'
+import { getWalletProvidersForCountry, getProviderById } from '../data/walletProviders'
 import useDeviceCurrency from '../hooks/useDeviceCurrency'
 import usePaymentMethods from '../hooks/usePaymentMethods'
 import useRecipients from '../hooks/useRecipients'
@@ -59,9 +61,10 @@ const DEST_COUNTRIES = [
 // 'wallet' only works when the recipient has a registered Kalipeh account —
 // gated at selection time using the /transfer/quote `recipient_found` flag.
 const DELIVERY_OPTIONS = [
-  { id: 'wallet', label: 'Mobile Wallet', icon: Wallet,     needsAccount: true  },
-  { id: 'wave',   label: 'Wave',          icon: Smartphone, needsAccount: false },
-  { id: 'cash',   label: 'Cash Pickup',   icon: Building2,  needsAccount: false },
+  { id: 'wallet',        label: 'Kalipeh Wallet', icon: Wallet,     needsAccount: true  },
+  { id: 'wave',          label: 'Wave',           icon: Smartphone, needsAccount: false },
+  { id: 'mobile_wallet', label: 'Mobile Money',   icon: Smartphone, needsAccount: false },
+  { id: 'cash',          label: 'Cash Pickup',    icon: Building2,  needsAccount: false },
 ]
 
 // Hard-coded fee rate remains until Phase 3 (backend-driven quote)
@@ -111,6 +114,23 @@ async function notifySender(transferData) {
       pickup_code:     transferData.pickup_code || null,
     })
   } catch { /* silent */ }
+}
+
+function SendStepTracker({ step }) {
+  const STEPS = ['Recipient', 'Amount', 'Delivery', 'Payment']
+  return (
+    <View style={st.wrap}>
+      {STEPS.map((label, i) => (
+        <View key={label} style={st.item}>
+          <View style={[st.dot, i <= step && st.dotActive]}>
+            <Text style={[st.dotText, i <= step && st.dotTextActive]}>{i + 1}</Text>
+          </View>
+          <Text style={[st.label, i <= step && st.labelActive]}>{label}</Text>
+          {i < STEPS.length - 1 && <View style={[st.line, i < step && st.lineActive]} />}
+        </View>
+      ))}
+    </View>
+  )
 }
 
 async function notifyRecipient(transferData, toPhone) {
@@ -236,9 +256,12 @@ export default function SendMoneyScreen() {
 
   const [toPhone, setToPhone]               = useState(route.params?.to_phone || '')
   const [delivery, setDelivery]             = useState(route.params?.delivery || 'wallet')
+  const [mobileWalletProvider, setMobileWalletProvider] = useState('')
   const [description, setDescription]       = useState('')
   const [amount, setAmount]                 = useState('')
   const [recipientName, setRecipientName]   = useState('')
+  const [touchedPhone, setTouchedPhone]     = useState(false)
+  const [touchedAmount, setTouchedAmount]   = useState(false)
   const [destCountry, setDestCountry]       = useState(DEST_COUNTRIES[16])
   const [showCountryPicker, setShowCountryPicker] = useState(false)
   const [liveRate, setLiveRate]             = useState(null)
@@ -246,6 +269,7 @@ export default function SendMoneyScreen() {
   const [loading, setLoading]               = useState(false)
   const [confirming, setConfirming]         = useState(false)
   const [showConfirm, setShowConfirm]       = useState(false)
+  const [showDetails, setShowDetails]       = useState(false)
   const [result, setResult]                 = useState(null)
   const [selectedPayMethod, setSelectedPayMethod] = useState(null) // null = wallet
   const [paymentChosen, setPaymentChosen]         = useState(false)
@@ -260,7 +284,8 @@ export default function SendMoneyScreen() {
   const { wallet, setWallet, transactions, setTransactions, refresh: refreshWallet } = useWalletBalance()
   const { paymentMethods, setPaymentMethods, refresh: refreshPaymentMethods } = usePaymentMethods()
   const { recipients: savedRecipients, setRecipients: setSavedRecipients, refresh: refreshRecipients } = useRecipients()
-  const senderCcy    = deviceCcy || user?.home_currency || wallet?.currency || 'USD'
+  const countryCcy   = getCurrencyByCountryName(user?.country || user?.home_country)
+  const senderCcy    = countryCcy || user?.home_currency || deviceCcy || wallet?.currency || 'USD'
   const { quote, loading: quoteLoading, refresh: fetchQuote } = useTransferQuote(toPhone, amount, senderCcy, destCcy)
   const destCcy      = destCountry.currency
   const sendAmt      = parseFloat(amount) || 0
@@ -273,6 +298,7 @@ export default function SendMoneyScreen() {
   const isValid    = toPhone.trim().length > 5 && sendAmt > 0
   const savedCards = paymentMethods.filter(m => m.type === 'card')
   const savedACH   = paymentMethods.filter(m => m.type === 'ach' || m.type === 'bank_transfer')
+  const savedMobileWallets = paymentMethods.filter(m => getProviderById(m.type))
 
   const initials = user?.full_name
     ? user.full_name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
@@ -312,6 +338,14 @@ export default function SendMoneyScreen() {
       .finally(() => setRateLoading(false))
   }, [senderCcy, destCcy])
 
+  // Keep the selected mobile wallet provider in sync with the destination country
+  useEffect(() => {
+    if (delivery !== 'mobile_wallet') return
+    const providers = getWalletProvidersForCountry(destCountry.name)
+    const selected = providers.find(p => p.id === mobileWalletProvider)
+    if (!selected && providers.length) setMobileWalletProvider(providers[0].id)
+  }, [destCountry, delivery, mobileWalletProvider])
+
   // Quote may also carry a known exchange rate
   useEffect(() => {
     if (quote?.recipient_found && quote?.exchange_rate) setLiveRate(quote.exchange_rate)
@@ -343,18 +377,26 @@ export default function SendMoneyScreen() {
     if (delivery !== 'wallet' || quote.recipient_found) return
     if (autoSwitchedForPhone.current === toPhone) return
     autoSwitchedForPhone.current = toPhone
-    setDelivery('cash')
-    Toast.show({
-      type: 'info',
-      text1: 'Switched to Cash Pickup',
-      text2: 'This recipient doesn\'t have a Kalipeh wallet yet',
-    })
+    Alert.alert(
+      'Switch delivery method?',
+      `${toPhone} doesn't have a Kalipeh wallet yet. Cash pickup is available now, or keep Wallet if you want to invite them later.`,
+      [
+        { text: 'Keep Wallet', style: 'cancel' },
+        { text: 'Switch to Cash', onPress: () => setDelivery('cash') },
+      ]
+    )
   }, [quote, quoteLoading, delivery, toPhone])
 
   const selectDelivery = (id) => {
     if (id === 'wallet' && quote && !quote.recipient_found) {
       Toast.show({ type: 'error', text1: 'Recipient needs a Kalipeh wallet for this option' })
       return
+    }
+    if (id === 'mobile_wallet') {
+      const providers = getWalletProvidersForCountry(destCountry.name)
+      if (!mobileWalletProvider && providers.length) setMobileWalletProvider(providers[0].id)
+    } else {
+      setMobileWalletProvider('')
     }
     setDelivery(id)
   }
@@ -432,12 +474,24 @@ export default function SendMoneyScreen() {
       return
     }
 
-    if (!toPhone.trim()) return Toast.show({ type: 'error', text1: 'Enter recipient phone' })
-    if (!amount || sendAmt <= 0) return Toast.show({ type: 'error', text1: 'Enter an amount' })
+    if (!toPhone.trim()) {
+      Haptics.error()
+      return Toast.show({ type: 'error', text1: 'Enter recipient phone' })
+    }
+    if (!amount || sendAmt <= 0) {
+      Haptics.error()
+      return Toast.show({ type: 'error', text1: 'Enter an amount' })
+    }
     if (delivery === 'wallet' && quote && !quote.recipient_found) {
+      Haptics.error()
       return Toast.show({ type: 'error', text1: 'Recipient needs a Kalipeh wallet for this option' })
     }
+    if (delivery === 'mobile_wallet' && !mobileWalletProvider) {
+      Haptics.error()
+      return Toast.show({ type: 'error', text1: 'Select a mobile wallet provider' })
+    }
     // Reset payment selection so user must choose on confirm sheet
+    Haptics.light()
     setSelectedPayMethod(null)
     setPaymentChosen(false)
     setShowConfirm(true)
@@ -589,6 +643,21 @@ export default function SendMoneyScreen() {
         })
         responseData = data
 
+      } else if (delivery === 'mobile_wallet') {
+        const provider = getProviderById(mobileWalletProvider)
+        if (!provider) throw new Error('Select a mobile wallet provider')
+        const { data } = await api.post(provider.transferEndpoint, {
+          to_phone:          toPhone,
+          amount:            sendAmt,
+          send_currency:     senderCcy,
+          recv_currency:     destCcy,
+          description,
+          recipient_name:    resolvedRecipientName,
+          payment_method_id: paymentMethodId,
+          provider:          provider.id,
+        })
+        responseData = data
+
       } else if (delivery === 'cash') {
         const agentsRes = await api.get(`transfer/agents?country=${encodeURIComponent(destCountry.name)}`)
         const agents = agentsRes.data?.agents || []
@@ -630,12 +699,14 @@ export default function SendMoneyScreen() {
       }
 
       setShowConfirm(false)
+      Haptics.success()
       notifySender(enriched)
       notifyRecipient(enriched, toPhone)
       sendReceipt(enriched, user?.email, user?.full_name)
       setResult({ ...enriched, sent_at: new Date().toISOString() })
 
     } catch (err) {
+      Haptics.error()
       const msg =
         err.response?.data?.detail ||
         err.response?.data?.message ||
@@ -781,7 +852,7 @@ export default function SendMoneyScreen() {
             <View style={[rc.detailRow, { borderBottomWidth: 0 }]}>
               <Text style={rc.detailLabel}>Delivery Method</Text>
               <Text style={rc.detailValue}>
-                {delivery === 'wave' ? 'Wave Mobile Money' : delivery === 'cash' ? 'Cash Pickup' : 'Mobile Wallet'}
+                {delivery === 'wave' ? 'Wave Mobile Money' : delivery === 'cash' ? 'Cash Pickup' : delivery === 'mobile_wallet' ? 'Mobile Money' : 'Kalipeh Wallet'}
               </Text>
             </View>
           </View>
@@ -891,6 +962,14 @@ export default function SendMoneyScreen() {
           </View>
         )}
 
+        {/* ── Step tracker ── */}
+        <SendStepTracker step={
+          !toPhone.trim() ? 0
+          : !amount ? 1
+          : !paymentChosen ? 2
+          : 3
+        } />
+
         {/* ── Main card (floats over header) ── */}
         <View style={s.mainCard}>
 
@@ -900,11 +979,12 @@ export default function SendMoneyScreen() {
               <Text style={s.recipientIcon}>👤</Text>
             </View>
             <TextInput
-              style={s.recipientInput}
-              placeholder="Recipient phone number"
+              style={[s.recipientInput, touchedPhone && !toPhone.trim() && s.inputError]}
+              placeholder="Recipient phone number *"
               placeholderTextColor="#A0AEC0"
               value={toPhone}
               onChangeText={setToPhone}
+              onBlur={() => setTouchedPhone(true)}
               keyboardType="phone-pad"
               autoCorrect={false}
             />
@@ -916,6 +996,32 @@ export default function SendMoneyScreen() {
               <UserPlus size={18} color={TEAL} />
             </TouchableOpacity>
           </View>
+
+          {/* Saved recipient quick-select */}
+          {savedRecipients.length > 0 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={s.recipientChips}
+              keyboardShouldPersistTaps="handled"
+            >
+              {savedRecipients.map(r => (
+                <TouchableOpacity
+                  key={r.id || r.phone_number}
+                  style={[s.recipientChip, toPhone === r.phone_number && s.recipientChipActive]}
+                  onPress={() => { setToPhone(r.phone_number); setRecipientName(r.nickname || r.full_name || '') }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[s.recipientChipText, toPhone === r.phone_number && s.recipientChipTextActive]}>
+                    {r.nickname || r.full_name || r.phone_number}
+                  </Text>
+                  <Text style={[s.recipientChipPhone, toPhone === r.phone_number && s.recipientChipPhoneActive]}>
+                    {r.phone_number}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
 
           {/* Verified badge */}
           {quoteLoading && (
@@ -967,22 +1073,48 @@ export default function SendMoneyScreen() {
             </View>
           )}
 
+          {/* Mobile wallet provider picker */}
+          {delivery === 'mobile_wallet' && (
+            <View style={s.providerPicker}>
+              <Text style={s.providerLabel}>Mobile wallet provider</Text>
+              <View style={s.providerRow}>
+                {getWalletProvidersForCountry(destCountry.name).map(p => (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={[s.providerPill, mobileWalletProvider === p.id && s.providerPillActive]}
+                    onPress={() => setMobileWalletProvider(p.id)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={{ fontSize: 16 }}>{p.icon}</Text>
+                    <Text style={[s.providerPillText, mobileWalletProvider === p.id && s.providerPillTextActive]}>
+                      {p.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+                {!getWalletProvidersForCountry(destCountry.name).length && (
+                  <Text style={s.noProviderText}>No mobile money providers available in {destCountry.name}</Text>
+                )}
+              </View>
+            </View>
+          )}
+
           <View style={s.cardDivider} />
 
           {/* Amount inputs */}
           <View style={s.amountSection}>
             {/* You send */}
             <View style={s.amountCol}>
-              <Text style={s.amountLabel}>YOU SEND</Text>
+              <Text style={s.amountLabel}>YOU SEND *</Text>
               <View style={s.amountInputRow}>
                 <Text style={s.currencySymbol}>{CURRENCY_SYMBOLS[senderCcy] || senderCcy}</Text>
                 <TextInput
-                  style={s.amountInput}
+                  style={[s.amountInput, touchedAmount && (!amount || parseFloat(amount) <= 0) && s.inputError]}
                   placeholder="0"
                   placeholderTextColor="#CBD5E0"
                   keyboardType="decimal-pad"
                   value={amount}
                   onChangeText={setAmount}
+                  onBlur={() => setTouchedAmount(true)}
                 />
               </View>
               <Text style={s.amountCcy}>{senderCcy}</Text>
@@ -1024,6 +1156,26 @@ export default function SendMoneyScreen() {
               Fee {sendAmt > 0 ? fmt(fee, senderCcy) : '0.00'}
             </Text>
           </View>
+
+          {/* Cost breakdown */}
+          {sendAmt > 0 && (
+            <View style={s.costSummary}>
+              <View style={s.costRow}>
+                <Text style={s.costLabel}>You send</Text>
+                <Text style={s.costValue}>{fmt(sendAmt, senderCcy)}</Text>
+              </View>
+              <View style={s.costRow}>
+                <Text style={s.costLabel}>Fee (1.5%)</Text>
+                <Text style={s.costValue}>{fmt(fee, senderCcy)}</Text>
+              </View>
+              <View style={[s.costRow, s.costRowLast]}>
+                <Text style={s.costLabel}>Recipient gets</Text>
+                <Text style={[s.costValue, { color: TEAL }]}>
+                  {receivedAmt != null ? fmt(receivedAmt, destCcy) : '—'}
+                </Text>
+              </View>
+            </View>
+          )}
 
         </View>
 
@@ -1142,21 +1294,12 @@ export default function SendMoneyScreen() {
                     <Text style={cs.heroName}>{quote?.recipient_name || recipientName.trim() || toPhone}</Text>
                     <Text style={cs.heroSub}>
                       {toPhone}{'  ·  '}
-                      {delivery === 'wave' ? 'Wave Mobile Money' : delivery === 'cash' ? 'Cash Pickup' : 'Mobile Wallet'}
+                      {delivery === 'wave' ? 'Wave Mobile Money' : delivery === 'cash' ? 'Cash Pickup' : delivery === 'mobile_wallet' ? 'Mobile Money' : 'Kalipeh Wallet'}
                     </Text>
                   </View>
                   <Text style={{ fontSize: 30 }}>{destCountry.flag}</Text>
                 </View>
               </View>
-
-              {/* ── Breakdown card ── */}
-              <View style={cs.breakCard}>
-                <BreakRow label="Transfer fees"   value={`${fee.toFixed(2)} ${senderCcy}`} />
-                <BreakRow label="Exchange rate"   value={effectiveRate ? `1 ${senderCcy} = ${effectiveRate.toFixed(2)} ${destCcy}` : '—'} />
-                <BreakRow label="Recipient gets"  value={receivedAmt != null ? `${receivedAmt.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${destCcy}` : '—'} />
-                <BreakRow label="Delivery"        value="Under a minute" last />
-              </View>
-              <Text style={cs.receiveNote}>* Recipient may receive less due to provider fees or foreign taxes.</Text>
 
               {/* ── Pay with ── */}
               <TouchableOpacity
@@ -1199,10 +1342,32 @@ export default function SendMoneyScreen() {
                 <Text style={cs.totalValue}>{sendAmt.toFixed(2)} {senderCcy}</Text>
               </View>
 
-              {/* ── Disclaimer ── */}
-              <Text style={cs.disclaimerText}>
-                Please be sure you know your recipient. Fraudulent transactions may result in the loss of your money with no recourse. To report fraud call 701-515-4355.
-              </Text>
+              {/* ── Expand details ── */}
+              <TouchableOpacity
+                style={cs.detailsToggle}
+                onPress={() => setShowDetails(v => !v)}
+                activeOpacity={0.75}
+              >
+                <Text style={cs.detailsToggleText}>{showDetails ? 'Hide details' : 'Show details'}</Text>
+                <Text style={cs.detailsToggleChevron}>{showDetails ? '▲' : '▼'}</Text>
+              </TouchableOpacity>
+
+              {showDetails && (
+                <>
+                  <View style={cs.breakCard}>
+                    <BreakRow label="Transfer fees"   value={`${fee.toFixed(2)} ${senderCcy}`} />
+                    <BreakRow label="Exchange rate"   value={effectiveRate ? `1 ${senderCcy} = ${effectiveRate.toFixed(2)} ${destCcy}` : '—'} />
+                    <BreakRow label="Recipient gets"  value={receivedAmt != null ? `${receivedAmt.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${destCcy}` : '—'} />
+                    <BreakRow label="Delivery"        value="Under a minute" last />
+                  </View>
+                  <Text style={cs.receiveNote}>* Recipient may receive less due to provider fees or foreign taxes.</Text>
+
+                  {/* ── Disclaimer ── */}
+                  <Text style={cs.disclaimerText}>
+                    Please be sure you know your recipient. Fraudulent transactions may result in the loss of your money with no recourse. To report fraud call 701-515-4355.
+                  </Text>
+                </>
+              )}
 
             </ScrollView>
 
@@ -1261,7 +1426,14 @@ export default function SendMoneyScreen() {
                         >
                           <PayMethodBadge method={m} />
                           <View style={{ flex: 1 }}>
-                            <Text style={cs.pickerLabel}>{m.label}</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                              <Text style={cs.pickerLabel}>{m.label}</Text>
+                              {m.is_default && (
+                                <View style={cs.defaultBadge}>
+                                  <Text style={cs.defaultBadgeText}>Default</Text>
+                                </View>
+                              )}
+                            </View>
                             <Text style={cs.pickerSub}>
                               {m.last_four ? `•••${m.last_four}` : m.expiry_month ? `Expires ${String(m.expiry_month).padStart(2,'0')}/${m.expiry_year}` : 'Card'}
                             </Text>
@@ -1300,7 +1472,14 @@ export default function SendMoneyScreen() {
                         >
                           <PayMethodBadge method={m} />
                           <View style={{ flex: 1 }}>
-                            <Text style={cs.pickerLabel}>{m.label}</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                              <Text style={cs.pickerLabel}>{m.label}</Text>
+                              {m.is_default && (
+                                <View style={cs.defaultBadge}>
+                                  <Text style={cs.defaultBadgeText}>Default</Text>
+                                </View>
+                              )}
+                            </View>
                             <Text style={cs.pickerSub}>Bank account</Text>
                           </View>
                           {selectedPayMethod?.id === m.id && <View style={cs.selectedDot} />}
@@ -1325,6 +1504,43 @@ export default function SendMoneyScreen() {
                       </View>
                       <Text style={cs.pickerAddChevron}>›</Text>
                     </TouchableOpacity>
+
+                    {/* ── Mobile Money ── */}
+                    {savedMobileWallets.length > 0 && (
+                      <>
+                        <Text style={cs.pickerSection}>Mobile Money</Text>
+                        {savedMobileWallets.map(m => (
+                          <View key={m.id} style={[cs.pickerRow, selectedPayMethod?.id === m.id && cs.pickerRowSelected]}>
+                            <TouchableOpacity
+                              style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 14 }}
+                              onPress={() => { setSelectedPayMethod(m); setPaymentChosen(true); setShowPayPicker(false) }}
+                              activeOpacity={0.75}
+                            >
+                              <PayMethodBadge method={m} />
+                              <View style={{ flex: 1 }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                  <Text style={cs.pickerLabel}>{m.label}</Text>
+                                  {m.is_default && (
+                                    <View style={cs.defaultBadge}>
+                                      <Text style={cs.defaultBadgeText}>Default</Text>
+                                    </View>
+                                  )}
+                                </View>
+                                <Text style={cs.pickerSub}>Mobile wallet</Text>
+                              </View>
+                              {selectedPayMethod?.id === m.id && <View style={cs.selectedDot} />}
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={cs.deleteBtn}
+                              onPress={() => deletePaymentMethod(m)}
+                              activeOpacity={0.6}
+                            >
+                              <Trash2 size={18} color="#EF4444" />
+                            </TouchableOpacity>
+                          </View>
+                        ))}
+                      </>
+                    )}
 
                   </ScrollView>
                 </View>
@@ -1539,6 +1755,14 @@ function PayMethodBadge({ method }) {
       </View>
     )
   }
+  const provider = getProviderById(method.type)
+  if (provider) {
+    return (
+      <View style={[cs.walletBadge, { backgroundColor: '#F3F4F6', width: 44 }]}>
+        <Text style={[cs.walletBadgeText, { fontSize: 16 }]}>{provider.icon}</Text>
+      </View>
+    )
+  }
   const badge = TYPE_BADGE[method.type] || { text: '💳', bg: '#E5E7EB', fg: '#374151' }
   return (
     <View style={[cs.walletBadge, { backgroundColor: badge.bg, width: 44 }]}>
@@ -1692,6 +1916,19 @@ const s = StyleSheet.create({
   recipientInput: { flex: 1, fontSize: 16, color: '#111', paddingVertical: 0 },
   addRecipientBtn:{ padding: 8 },
 
+  // Saved recipient chips
+  recipientChips: { flexDirection: 'row', gap: 8, paddingLeft: 52, marginBottom: 10 },
+  recipientChip: {
+    backgroundColor: '#F0FAF9', borderRadius: 12,
+    paddingHorizontal: 12, paddingVertical: 8,
+    borderWidth: 1.5, borderColor: 'transparent',
+  },
+  recipientChipActive: { backgroundColor: TEAL, borderColor: TEAL },
+  recipientChipText: { fontSize: 12, fontWeight: '700', color: TEAL },
+  recipientChipTextActive: { color: '#fff' },
+  recipientChipPhone: { fontSize: 10, color: '#9CA3AF', marginTop: 2 },
+  recipientChipPhoneActive: { color: 'rgba(255,255,255,0.8)' },
+
   // Status row (verified/loading)
   statusRow:  { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6, paddingLeft: 52 },
   statusText: { fontSize: 13, color: '#9CA3AF' },
@@ -1722,6 +1959,16 @@ const s = StyleSheet.create({
   deliveryPillTextActive:  { color: '#fff' },
   deliveryPillTextDisabled:{ color: '#C4C9D4' },
 
+  // Mobile wallet provider picker
+  providerPicker: { marginTop: 4, paddingLeft: 52, marginBottom: 6 },
+  providerLabel:  { fontSize: 11, fontWeight: '700', color: '#6B7280', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
+  providerRow:    { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  providerPill:   { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#F9FAFB', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7, borderWidth: 1.5, borderColor: '#E5E7EB' },
+  providerPillActive:   { backgroundColor: TEAL, borderColor: TEAL },
+  providerPillText:     { fontSize: 12, fontWeight: '600', color: '#111' },
+  providerPillTextActive: { color: '#fff' },
+  noProviderText: { fontSize: 12, color: '#9CA3AF', fontStyle: 'italic' },
+
   // Amount columns
   amountSection: {
     flexDirection: 'row', alignItems: 'center', gap: 0, marginBottom: 14,
@@ -1732,6 +1979,7 @@ const s = StyleSheet.create({
   currencySymbol:{ fontSize: 18, fontWeight: '700', color: '#111' },
   amountInput:  { fontSize: 26, fontWeight: '800', color: '#111', minWidth: 60, paddingVertical: 0 },
   amountCcy:    { fontSize: 12, color: '#9CA3AF', marginTop: 4, fontWeight: '500' },
+  inputError:   { borderBottomWidth: 2, borderBottomColor: '#EF4444' },
 
   // Arrow column
   arrowCol: { width: 48, alignItems: 'center', justifyContent: 'center', paddingTop: 14 },
@@ -1761,6 +2009,22 @@ const s = StyleSheet.create({
   },
   rateChipText: { fontSize: 12, color: '#6B7280', fontWeight: '500' },
   rateChipDot:  { width: 4, height: 4, borderRadius: 2, backgroundColor: '#D1D5DB' },
+
+  // Cost breakdown
+  costSummary: {
+    marginTop: 14,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 12,
+    padding: 14,
+  },
+  costRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: '#E5E7EB',
+  },
+  costRowLast: { borderBottomWidth: 0 },
+  costLabel: { fontSize: 13, color: '#6B7280', fontWeight: '500' },
+  costValue: { fontSize: 14, fontWeight: '700', color: '#111' },
 
   // ── CTA ──────────────────────────────────────────────────────────────────────
   ctaWrap: { paddingHorizontal: 16, marginTop: 18, marginBottom: 18 },
@@ -1915,8 +2179,13 @@ const cs = StyleSheet.create({
   totalLabel: { fontSize: 15, fontWeight: '600', color: '#374151' },
   totalValue: { fontSize: 20, fontWeight: '800', color: '#111827' },
 
+  // ── Details toggle ─────────────────────────────────────────────────────────────
+  detailsToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#F3F4F6', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, marginHorizontal: 20, marginBottom: 10 },
+  detailsToggleText: { fontSize: 13, fontWeight: '700', color: '#4F46E5' },
+  detailsToggleChevron: { fontSize: 13, color: '#4F46E5' },
+
   // ── Disclaimer ────────────────────────────────────────────────────────────────
-  disclaimerText: { fontSize: 11, color: '#9CA3AF', lineHeight: 17, textAlign: 'center', marginHorizontal: 20, marginBottom: 14 },
+  disclaimerText: { fontSize: 11, color: '#6B7280', lineHeight: 17, textAlign: 'center', marginHorizontal: 20, marginBottom: 14 },
 
   // ── Wallet badge ──────────────────────────────────────────────────────────────
   walletBadge:     { width: 38, height: 26, backgroundColor: '#1A1F71', borderRadius: 5, alignItems: 'center', justifyContent: 'center' },
@@ -1947,8 +2216,24 @@ const cs = StyleSheet.create({
   pickerAddChevron: { fontSize: 20, color: '#9CA3AF' },
   pickerLabel:    { fontSize: 15, fontWeight: '600', color: '#111' },
   pickerSub:      { fontSize: 13, color: '#888', marginTop: 2 },
+  defaultBadge:   { backgroundColor: '#EEF2FF', borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2 },
+  defaultBadgeText:{ fontSize: 10, fontWeight: '700', color: '#4F46E5' },
   selectedDot:    { width: 10, height: 10, borderRadius: 5, backgroundColor: '#F5C842' },
   deleteBtn:      { padding: 10, marginLeft: 4 },
+})
+
+// ── Step tracker styles ─────────────────────────────────────────────────────────
+const st = StyleSheet.create({
+  wrap:    { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: '#F4F6F9' },
+  item:    { flex: 1, flexDirection: 'row', alignItems: 'center' },
+  dot:     { width: 26, height: 26, borderRadius: 13, backgroundColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  dotActive:{ backgroundColor: '#0E9E98' },
+  dotText: { fontSize: 11, fontWeight: '800', color: '#9CA3AF' },
+  dotTextActive:{ color: '#fff' },
+  label:   { fontSize: 11, color: '#9CA3AF', marginLeft: 6, fontWeight: '600' },
+  labelActive:{ color: '#0E9E98' },
+  line:    { flex: 1, height: 2, backgroundColor: '#E5E7EB', marginHorizontal: 6 },
+  lineActive:{ backgroundColor: '#0E9E98' },
 })
 
 // ── Professional Receipt styles ────────────────────────────────────────────────

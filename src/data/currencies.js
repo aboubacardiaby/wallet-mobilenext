@@ -1,4 +1,5 @@
 // ISO 4217 / ISO 3166-1 currency helpers used by the send-money flow.
+import COUNTRIES from './countries'
 
 const CURRENCY_SYMBOLS = {
   USD: '$', EUR: '€', GBP: '£', CAD: 'C$', CHF: 'Fr',
@@ -7,7 +8,9 @@ const CURRENCY_SYMBOLS = {
   SEK: 'kr', NOK: 'kr', DKK: 'kr', AUD: 'A$', NZD: 'NZ$',
 }
 
-// ISO 3166-1 alpha-2 region → ISO 4217 currency for sender countries
+// ISO 3166-1 alpha-2 region → ISO 4217 currency for sender countries.
+// Manual overrides first, then fill in from the full country list so every
+// supported/customer location maps to a currency instead of falling back to USD.
 const REGION_CURRENCY = {
   US: 'USD', CA: 'CAD', GB: 'GBP', CH: 'CHF',
   FR: 'EUR', DE: 'EUR', ES: 'EUR', IT: 'EUR', PT: 'EUR',
@@ -16,6 +19,7 @@ const REGION_CURRENCY = {
   LV: 'EUR', LT: 'EUR', CY: 'EUR', GR: 'EUR',
   SE: 'SEK', NO: 'NOK', DK: 'DKK',
   AU: 'AUD', NZ: 'NZD',
+  ...Object.fromEntries(COUNTRIES.map(c => [c.code, c.currency])),
 }
 
 function getDeviceCurrency() {
@@ -30,10 +34,21 @@ function getDeviceCurrency() {
   }
 }
 
+function getCurrencyByCountryName(name) {
+  if (!name) return null
+  const n = String(name).toLowerCase().trim().replace(/^the\s+/, '')
+  const match = COUNTRIES.find(c =>
+    c.name.toLowerCase() === n ||
+    c.code.toLowerCase() === n ||
+    c.dial.replace(/\+/g, '') === n.replace(/\+/g, '')
+  )
+  return match?.currency || null
+}
+
 function fmt(n, ccy) {
   if (n == null || isNaN(n)) return '—'
   const sym = CURRENCY_SYMBOLS[ccy] || ccy
   return `${sym} ${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
 }
 
-export { CURRENCY_SYMBOLS, REGION_CURRENCY, getDeviceCurrency, fmt }
+export { CURRENCY_SYMBOLS, REGION_CURRENCY, getDeviceCurrency, getCurrencyByCountryName, fmt }

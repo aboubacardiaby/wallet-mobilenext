@@ -1,18 +1,19 @@
 import { useState, useEffect } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ScrollView, Alert,
+  ScrollView, Alert, Switch,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
 import Toast from 'react-native-toast-message'
 import {
-  User, LogOut, Shield, Phone, Mail, Users,
+  User, LogOut, Phone, Mail, Users,
   ShieldCheck, ShieldX, Clock, ChevronRight,
-  CreditCard, Smartphone, Pencil, Check, X,
+  CreditCard, Smartphone, Pencil, Check, X, HelpCircle,
 } from 'lucide-react-native'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import { useTheme } from '../context/ThemeContext'
 import Spinner from '../components/Spinner'
 
 const NAVY        = '#0A1628'
@@ -22,15 +23,25 @@ const TEAL_BORDER = '#C9EDE9'
 
 const KYC_CONFIG = {
   verified:     { Icon: ShieldCheck, label: 'Verified',      color: '#10B981', bg: '#ECFDF5' },
+  not_started:  { Icon: User,        label: 'Not started',    color: '#9CA3AF', bg: '#F3F4F6' },
   pending:      { Icon: Clock,       label: 'Pending',        color: '#F59E0B', bg: '#FFFBEB' },
   under_review: { Icon: Clock,       label: 'Under Review',   color: '#3B82F6', bg: '#EFF6FF' },
   rejected:     { Icon: ShieldX,     label: 'Action needed',  color: '#EF4444', bg: '#FEF2F2' },
+}
+
+const KYC_PROGRESS = {
+  not_started: 0,
+  rejected: 15,
+  pending: 40,
+  under_review: 75,
+  verified: 100,
 }
 
 export default function ProfileScreen() {
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
   const { user, logout, refreshProfile } = useAuth()
+  const { isDark, toggleTheme } = useTheme()
 
   const [profile, setProfile]   = useState(user)
   const [loading, setLoading]   = useState(false)
@@ -45,6 +56,10 @@ export default function ProfileScreen() {
   }, [])
 
   const save = async () => {
+    if (!fullName.trim()) return Toast.show({ type: 'error', text1: 'Enter your full name' })
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return Toast.show({ type: 'error', text1: 'Enter a valid email' })
+    }
     setLoading(true)
     try {
       await api.put('user/profile', { full_name: fullName, email })
@@ -76,8 +91,11 @@ export default function ProfileScreen() {
     ? profile.full_name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
     : (profile?.email?.[0] || 'U').toUpperCase()
 
+  const bg = isDark ? '#0A1628' : '#F4F6F9'
+  const cardBg = isDark ? '#111827' : '#fff'
+
   return (
-    <View style={[s.screen, { paddingTop: insets.top }]}>
+    <View style={[s.screen, { paddingTop: insets.top, backgroundColor: bg }]}>
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingBottom: insets.bottom + 32 }}
@@ -139,18 +157,28 @@ export default function ProfileScreen() {
                 <KycIcon size={18} color={kyc.color} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={[s.kycBannerTitle, { color: kyc.color }]}>
-                  {kycKey === 'rejected'     ? 'Verification failed — resubmit'
-                    : kycKey === 'pending'   ? 'Complete identity verification'
-                    : 'Verification in progress'}
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={[s.kycBannerTitle, { color: kyc.color }]}>
+                    {kycKey === 'rejected'     ? 'Verification failed — resubmit'
+                      : kycKey === 'pending'    ? 'Complete identity verification'
+                      : kycKey === 'not_started' ? 'Complete identity verification'
+                      : 'Verification in progress'}
+                  </Text>
+                  <Text style={[s.kycCta, { color: kyc.color }]}>
+                    {(kycKey === 'pending' || kycKey === 'not_started' || kycKey === 'rejected') ? 'Complete now' : 'In review'}
+                  </Text>
+                </View>
                 <Text style={s.kycBannerSub}>
-                  {kycKey === 'rejected'     ? 'Your submission was rejected. Tap to try again.'
-                    : kycKey === 'pending'   ? 'Submit your ID to unlock higher limits.'
+                  {kycKey === 'rejected'      ? 'Your submission was rejected. Tap to try again.'
+                    : kycKey === 'pending'    ? 'Submit your ID to unlock higher limits.'
+                    : kycKey === 'not_started' ? 'Verify your identity to send higher amounts.'
                     : "We're reviewing your documents. Sit tight!"}
                 </Text>
+                <View style={s.kycTrack}>
+                  <View style={[s.kycFill, { width: `${KYC_PROGRESS[kycKey] || 0}%`, backgroundColor: kyc.color }]} />
+                </View>
+                <Text style={[s.kycPercent, { color: kyc.color }]}>{KYC_PROGRESS[kycKey] || 0}% complete</Text>
               </View>
-              <ChevronRight size={16} color="#D1D5DB" />
             </TouchableOpacity>
           )}
 
@@ -247,17 +275,29 @@ export default function ProfileScreen() {
               )}
               <View style={s.menuDivider} />
               <MenuRow
-                icon={Shield} iconBg="#EEF2FF" iconColor="#6366F1"
-                title="Security"
-                sub="PIN & biometrics"
-              />
-              <View style={s.menuDivider} />
-              <MenuRow
                 icon={Smartphone} iconBg="#EFF6FF" iconColor="#3B82F6"
                 title="Device Manager"
                 sub="Trusted devices"
                 onPress={() => navigation.navigate('DeviceManager')}
               />
+              <View style={s.menuDivider} />
+              <MenuRow
+                icon={HelpCircle} iconBg="#F0FDF4" iconColor={TEAL}
+                title="Help & Support"
+                sub="FAQs and support"
+                onPress={() => Alert.alert('Help & Support', 'Our help center and FAQs are coming soon. For urgent issues, contact your support team.')}
+              />
+              <View style={s.menuDivider} />
+              <View style={s.menuRow}>
+                <View style={[s.menuIconWrap, { backgroundColor: '#111827' }]}>
+                  <Text style={{ fontSize: 16, color: '#fff' }}>●</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.menuTitle}>Dark Mode</Text>
+                  <Text style={s.menuSub}>{isDark ? 'On' : 'Off'}</Text>
+                </View>
+                <Switch value={isDark} onValueChange={toggleTheme} trackColor={{ true: '#4F46E5' }} />
+              </View>
             </View>
           </View>
 
@@ -371,8 +411,12 @@ const s = StyleSheet.create({
     width: 40, height: 40, borderRadius: 12,
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
-  kycBannerTitle: { fontSize: 13, fontWeight: '800', marginBottom: 3 },
-  kycBannerSub:   { fontSize: 12, color: '#6B7280', lineHeight: 17 },
+  kycBannerTitle: { fontSize: 13, fontWeight: '800' },
+  kycCta:         { fontSize: 11, fontWeight: '700' },
+  kycBannerSub:   { fontSize: 12, color: '#6B7280', lineHeight: 17, marginBottom: 10 },
+  kycTrack:       { height: 6, backgroundColor: '#F3F4F6', borderRadius: 3, overflow: 'hidden', marginBottom: 6 },
+  kycFill:        { height: '100%', borderRadius: 3 },
+  kycPercent:     { fontSize: 11, fontWeight: '700' },
 
   // ── Cards ────────────────────────────────────────────────────────────────────
   card: {
