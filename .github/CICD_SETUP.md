@@ -41,6 +41,7 @@ base64 -w 0 your-release-key.keystore         # Linux
 | Secret | Description |
 |--------|-------------|
 | `API_URL` | Production API URL (e.g., `https://kalipeh-wallet-xxx.run.app/api/v1/`) |
+| `STRIPE_PUBLISHABLE_KEY` | Stripe publishable key from the Stripe dashboard (e.g., `pk_test_...` or `pk_live_...`) |
 
 ### 4. Optional Secrets
 
