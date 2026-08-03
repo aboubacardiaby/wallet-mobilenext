@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   FlatList, Alert, ActivityIndicator, Switch,
@@ -33,8 +33,12 @@ const CARD_FIELD_STYLE = {
   placeholderColor: '#9CA3AF',
 }
 
+// Stripe's CardField requires a publishable key; without it the native SDK crashes
+// when the field mounts. Hide the card tab/add form if the key is not configured.
+const STRIPE_PK = process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY
+
 const BASE_FORM_TABS = [
-  { id: 'card',        label: 'Card',        icon: '💳' },
+  ...(STRIPE_PK ? [{ id: 'card', label: 'Card', icon: '💳' }] : []),
   { id: 'ach',         label: 'Bank (ACH)',  icon: '🏛️' },
   { id: 'paypal',      label: 'PayPal',      icon: '🅿️' },
   { id: 'mobile_wallet', label: 'Mobile Money', icon: '📱' },
@@ -59,7 +63,7 @@ export default function PaymentMethodsScreen() {
   const [methods, setMethods] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
-  const [activeTab, setActiveTab] = useState('card')
+  const [activeTab, setActiveTab] = useState(BASE_FORM_TABS[0].id)
 
   const load = async () => {
     try {
@@ -103,8 +107,8 @@ export default function PaymentMethodsScreen() {
       </View>
 
       <FlatList
-        data={methods}
-        keyExtractor={m => String(m.id)}
+        data={methods.filter(m => m && typeof m === 'object')}
+        keyExtractor={(m, i) => String(m.id ?? i)}
         contentContainerStyle={s.list}
         ListHeaderComponent={() => (
           <View>
@@ -162,9 +166,9 @@ export default function PaymentMethodsScreen() {
                 </View>
               )}
               <View style={{ flex: 1 }}>
-                <Text style={s.methodLabel}>{walletProvider?.name || m.label}</Text>
-                {m.type === 'card' && m.expiry_month && (
-                  <Text style={s.methodExpiry}>Expires {String(m.expiry_month).padStart(2, '0')}/{m.expiry_year}</Text>
+                <Text style={s.methodLabel}>{String(walletProvider?.name || m.label || '')}</Text>
+                {m.type === 'card' && m.expiry_month != null && (
+                  <Text style={s.methodExpiry}>Expires {String(m.expiry_month).padStart(2, '0')}/{String(m.expiry_year || '')}</Text>
                 )}
                 {m.is_default && (
                   <View style={s.defaultBadge}>
@@ -174,9 +178,9 @@ export default function PaymentMethodsScreen() {
                 )}
                 {(m.fee != null || m.limit != null) && (
                   <Text style={s.methodMeta}>
-                    {m.fee != null && m.fee}
+                    {m.fee != null && String(m.fee)}
                     {m.fee != null && m.limit != null && ' · '}
-                    {m.limit != null && m.limit}
+                    {m.limit != null && String(m.limit)}
                   </Text>
                 )}
               </View>
@@ -186,7 +190,7 @@ export default function PaymentMethodsScreen() {
                     <Star size={14} color="#CA8A04" />
                   </TouchableOpacity>
                 )}
-                <TouchableOpacity style={[s.actionBtn, { backgroundColor: '#FEF2F2' }]} onPress={() => remove(m.id, m.label)}>
+                <TouchableOpacity style={[s.actionBtn, { backgroundColor: '#FEF2F2' }]} onPress={() => remove(m.id, String(m.label || ''))}>
                   <Trash2 size={14} color="#EF4444" />
                 </TouchableOpacity>
               </View>
@@ -429,7 +433,11 @@ function AddMobileWalletForm({ userCountry, onDone }) {
   const [isDefault, setIsDefault] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  const providers = getWalletProvidersForCountry(userCountry)
+  const providers = useMemo(() => getWalletProvidersForCountry(userCountry), [userCountry])
+  const displayCountry = useMemo(() => {
+    const raw = userCountry && typeof userCountry === 'string' ? userCountry : 'your country'
+    return raw.trim() || 'your country'
+  }, [userCountry])
 
   useEffect(() => {
     if (providers.length && !providerId) setProviderId(providers[0].id)
@@ -456,7 +464,7 @@ function AddMobileWalletForm({ userCountry, onDone }) {
     return (
       <View style={sF.infoBanner}>
         <Text style={{ fontSize: 20 }}>📱</Text>
-        <Text style={sF.infoText}>No mobile money providers are available in {userCountry || 'your country'} yet.</Text>
+        <Text style={sF.infoText}>No mobile money providers are available in {displayCountry} yet.</Text>
       </View>
     )
   }

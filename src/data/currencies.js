@@ -34,9 +34,18 @@ function getDeviceCurrency() {
   }
 }
 
+function normalizeCountryKey(key) {
+  if (key == null) return ''
+  let raw = key
+  if (typeof key === 'object' && !Array.isArray(key)) {
+    raw = key.code || key.name || key.dial || String(key)
+  }
+  return String(raw).toLowerCase().trim().replace(/^the\s+/, '')
+}
+
 function getCurrencyByCountryName(name) {
-  if (!name) return null
-  const n = String(name).toLowerCase().trim().replace(/^the\s+/, '')
+  const n = normalizeCountryKey(name)
+  if (!n) return null
   const match = COUNTRIES.find(c =>
     c.name.toLowerCase() === n ||
     c.code.toLowerCase() === n ||

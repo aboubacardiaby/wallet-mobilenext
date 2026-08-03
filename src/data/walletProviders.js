@@ -38,7 +38,12 @@ const MOBILE_WALLET_PROVIDERS = [
 ]
 
 function normalizeCountryKey(key) {
-  return String(key).toLowerCase().trim().replace(/^the\s+/, '')
+  if (key == null) return ''
+  let raw = key
+  if (typeof key === 'object' && !Array.isArray(key)) {
+    raw = key.code || key.name || key.dial || String(key)
+  }
+  return String(raw).toLowerCase().trim().replace(/^the\s+/, '')
 }
 
 function getCountryCode(key) {

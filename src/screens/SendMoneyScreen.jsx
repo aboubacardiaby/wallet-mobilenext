@@ -71,6 +71,9 @@ const DELIVERY_OPTIONS = [
 
 const FEE_RATE = 0.015
 
+// Stripe CardField crashes if the publishable key is not configured.
+const STRIPE_PK = process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY
+
 const BRAND_LOGO = {
   visa:       { text: 'VISA', bg: '#1D4ED8', fg: '#fff' },
   mastercard: { text: 'MC',   bg: '#DC2626', fg: '#fff' },
@@ -420,6 +423,10 @@ export default function SendMoneyScreen() {
 
   // Show card entry modal for adding a new card during payment
   const showAddCardDuringPayment = () => {
+    if (!STRIPE_PK) {
+      Toast.show({ type: 'error', text1: 'Card payments are not configured in this build' })
+      return
+    }
     setShowPayPicker(false)
     setShowCardEntry(true)
   }
@@ -504,6 +511,10 @@ export default function SendMoneyScreen() {
 
     // If card payment method is selected but no ID (new card), show card entry modal
     if (selectedPayMethod?.type === 'card' && !selectedPayMethod?.id) {
+      if (!STRIPE_PK) {
+        Toast.show({ type: 'error', text1: 'Card payments are not configured in this build' })
+        return
+      }
       setShowCardEntry(true)
       return
     }
@@ -1427,7 +1438,7 @@ export default function SendMoneyScreen() {
                           <PayMethodBadge method={m} />
                           <View style={{ flex: 1 }}>
                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                              <Text style={cs.pickerLabel}>{m.label}</Text>
+                              <Text style={cs.pickerLabel}>{String(m.label || '')}</Text>
                               {m.is_default && (
                                 <View style={cs.defaultBadge}>
                                   <Text style={cs.defaultBadgeText}>Default</Text>
@@ -1449,17 +1460,18 @@ export default function SendMoneyScreen() {
                         </TouchableOpacity>
                       </View>
                     ))}
-                    {/* Always show Add new card option */}
-                    <TouchableOpacity style={cs.pickerAddRow} onPress={showAddCardDuringPayment} activeOpacity={0.75}>
-                      <View style={[cs.walletBadge, { backgroundColor: LIGHT_TEAL, width: 44 }]}>
-                        <Plus size={20} color={TEAL} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={cs.pickerLabel}>Add New Card</Text>
-                        <Text style={cs.pickerSub}>Credit or debit card</Text>
-                      </View>
-                      <Text style={cs.pickerAddChevron}>›</Text>
-                    </TouchableOpacity>
+                    {STRIPE_PK && (
+                      <TouchableOpacity style={cs.pickerAddRow} onPress={showAddCardDuringPayment} activeOpacity={0.75}>
+                        <View style={[cs.walletBadge, { backgroundColor: LIGHT_TEAL, width: 44 }]}>
+                          <Plus size={20} color={TEAL} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={cs.pickerLabel}>Add New Card</Text>
+                          <Text style={cs.pickerSub}>Credit or debit card</Text>
+                        </View>
+                        <Text style={cs.pickerAddChevron}>›</Text>
+                      </TouchableOpacity>
+                    )}
 
                     {/* ── ACH Bank Transfer ── */}
                     <Text style={cs.pickerSection}>ACH Bank Transfer</Text>
@@ -1473,7 +1485,7 @@ export default function SendMoneyScreen() {
                           <PayMethodBadge method={m} />
                           <View style={{ flex: 1 }}>
                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                              <Text style={cs.pickerLabel}>{m.label}</Text>
+                              <Text style={cs.pickerLabel}>{String(m.label || '')}</Text>
                               {m.is_default && (
                                 <View style={cs.defaultBadge}>
                                   <Text style={cs.defaultBadgeText}>Default</Text>
@@ -1519,7 +1531,7 @@ export default function SendMoneyScreen() {
                               <PayMethodBadge method={m} />
                               <View style={{ flex: 1 }}>
                                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                  <Text style={cs.pickerLabel}>{m.label}</Text>
+                                  <Text style={cs.pickerLabel}>{String(m.label || '')}</Text>
                                   {m.is_default && (
                                     <View style={cs.defaultBadge}>
                                       <Text style={cs.defaultBadgeText}>Default</Text>
@@ -1607,11 +1619,11 @@ export default function SendMoneyScreen() {
                   >
                     <PayMethodBadge method={m} />
                     <View style={{ flex: 1 }}>
-                      <Text style={ib.methodLabel}>{m.label}</Text>
+                      <Text style={ib.methodLabel}>{String(m.label || '')}</Text>
                       <Text style={ib.methodSub}>
                         {m.type === 'card' && m.expiry_month
-                          ? `Expires ${String(m.expiry_month).padStart(2,'0')}/${m.expiry_year}`
-                          : m.type.replace('_', ' ')}
+                          ? `Expires ${String(m.expiry_month).padStart(2,'0')}/${String(m.expiry_year || '')}`
+                          : String(m.type || '').replace(/_/g, ' ')}
                       </Text>
                     </View>
                     <Text style={{ color: '#D1D5DB', fontSize: 18 }}>›</Text>
@@ -1649,7 +1661,7 @@ export default function SendMoneyScreen() {
           Android Dialog window with no ViewTreeLifecycleOwner, which crashes
           Compose on mount ("ViewTreeLifecycleOwner not found"). Rendering this
           in-tree instead keeps it under the Activity's own lifecycle owner. */}
-      {showCardEntry && (
+      {showCardEntry && STRIPE_PK && (
         <View style={cs.cardEntryOverlay}>
           <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowCardEntry(false)} />
           <View style={[ce.sheet, { paddingBottom: insets.bottom + 24 }]}>
@@ -1747,6 +1759,7 @@ export default function SendMoneyScreen() {
 }
 
 function PayMethodBadge({ method }) {
+  if (!method) return null
   if (method.type === 'card') {
     const brand = BRAND_LOGO[method.card_brand] || BRAND_LOGO.unknown
     return (
