@@ -96,6 +96,7 @@ jobs:
         run: |
           echo "EXPO_PUBLIC_API_URL=${{ secrets.API_URL }}" > .env
           echo "EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY=${{ secrets.STRIPE_PUBLISHABLE_KEY }}" >> .env
+          echo "EXPO_PUBLIC_RECEIPT_EMAIL_ENDPOINT=${{ secrets.RECEIPT_EMAIL_ENDPOINT }}" >> .env
 
       - name: Decode Keystore
         run: |

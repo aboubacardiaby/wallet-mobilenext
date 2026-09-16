@@ -74,6 +74,9 @@ const FEE_RATE = 0.015
 // Stripe CardField crashes if the publishable key is not configured.
 const STRIPE_PK = process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY
 
+// Backend endpoint for sending the receipt email. Set in .env / EAS if different.
+const RECEIPT_EMAIL_ENDPOINT = process.env.EXPO_PUBLIC_RECEIPT_EMAIL_ENDPOINT || 'email/send'
+
 const BRAND_LOGO = {
   visa:       { text: 'VISA', bg: '#1D4ED8', fg: '#fff' },
   mastercard: { text: 'MC',   bg: '#DC2626', fg: '#fff' },
@@ -151,76 +154,99 @@ async function notifyRecipient(transferData, toPhone) {
   } catch { /* silent — 403 means backend route needs permission fix, see backend instructions */ }
 }
 
+function generatePickupCode() {
+  return Math.floor(100000 + Math.random() * 900000).toString()
+}
+
 function buildReceiptHtml(transferData, senderName) {
   const date = new Date(transferData.sent_at || Date.now()).toLocaleString('en', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
     hour: '2-digit', minute: '2-digit',
   })
-  const ref = (transferData.transaction_ref || '').slice(0, 20)
+  const ref = (transferData.transaction_ref || '').slice(0, 24)
+  const isCash = !!transferData.pickup_code
+  const displayFee = transferData.fee != null ? `${Number(transferData.fee).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${transferData.send_currency}` : null
 
   const row = (label, value) => value != null && value !== ''
     ? `<tr>
-        <td style="padding:10px 0;color:#6B7280;font-size:14px;border-bottom:1px solid #F3F4F6">${label}</td>
-        <td style="padding:10px 0;text-align:right;font-weight:600;color:#111;font-size:14px;border-bottom:1px solid #F3F4F6">${value}</td>
+        <td style="padding:12px 0;color:#6B7280;font-size:14px;border-bottom:1px solid #E5E7EB;vertical-align:top">${label}</td>
+        <td style="padding:12px 0;text-align:right;font-weight:600;color:#111827;font-size:14px;border-bottom:1px solid #E5E7EB;vertical-align:top">${value}</td>
        </tr>`
     : ''
 
   return `<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#F4F6F9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
-  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:40px auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="margin:0;padding:0;background:#F3F4F6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,0.08)">
+    <!-- Header -->
     <tr>
-      <td style="background:#0A1628;border-radius:16px 16px 0 0;padding:32px;text-align:center">
-        <p style="margin:0 0 4px;font-size:11px;font-weight:700;letter-spacing:2px;color:rgba(255,255,255,0.45)">KALIPEH WALLET</p>
-        <h1 style="margin:0;font-size:26px;font-weight:800;color:#fff">Transfer Receipt</h1>
-        <p style="margin:8px 0 0;font-size:13px;color:rgba(255,255,255,0.5)">${date}</p>
+      <td style="background:#0A1628;padding:40px 32px 32px;text-align:center">
+        <p style="margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:2.5px;color:rgba(255,255,255,0.5);text-transform:uppercase">Kalipeh Wallet</p>
+        <h1 style="margin:0;font-size:28px;font-weight:800;color:#ffffff">Transfer Receipt</h1>
+        <p style="margin:10px 0 0;font-size:13px;color:rgba(255,255,255,0.55)">${date}</p>
       </td>
     </tr>
+
+    <!-- Status + Amount Hero -->
     <tr>
-      <td style="background:#fff;padding:32px">
+      <td style="padding:32px 32px 8px;text-align:center">
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
+          <tr>
+            <td style="text-align:center">
+              <span style="display:inline-block;background:#D1FAE5;color:#059669;font-size:12px;font-weight:700;padding:6px 14px;border-radius:999px;text-transform:uppercase;letter-spacing:0.5px">Completed</span>
+            </td>
+          </tr>
+        </table>
+        <p style="margin:0 0 6px;font-size:14px;color:#6B7280"><strong style="color:#111827">${senderName || 'You'}</strong> sent</p>
+        <p style="margin:0;font-size:40px;font-weight:800;color:#111827;line-height:1.1">
+          ${Number(transferData.send_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span style="font-size:20px;color:#6B7280;font-weight:600">${transferData.send_currency}</span>
+        </p>
+        ${transferData.received_amount && transferData.recv_currency !== transferData.send_currency
+          ? `<p style="margin:10px 0 0;font-size:14px;color:#6B7280">
+              Recipient receives <strong style="color:#0E9E98">${Number(transferData.received_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${transferData.recv_currency}</strong>
+             </p>`
+          : ''}
+      </td>
+    </tr>
 
-        <div style="text-align:center;margin-bottom:28px">
-          <div style="display:inline-block;width:64px;height:64px;border-radius:50%;background:#D4EFEE;line-height:64px;font-size:30px;margin-bottom:12px">✓</div>
-          <p style="margin:0;font-size:15px;color:#6B7280">
-            <strong style="color:#111">${senderName || 'You'}</strong> sent
-          </p>
-          <p style="margin:4px 0 0;font-size:36px;font-weight:800;color:#111">
-            ${transferData.send_amount} <span style="font-size:20px;color:#374151">${transferData.send_currency}</span>
-          </p>
-          ${transferData.received_amount && transferData.recv_currency !== transferData.send_currency
-            ? `<p style="margin:6px 0 0;font-size:14px;color:#6B7280">
-                Recipient receives <strong>${transferData.received_amount} ${transferData.recv_currency}</strong>
-               </p>`
-            : ''}
-        </div>
-
+    <!-- Details -->
+    <tr>
+      <td style="padding:0 32px 32px">
         <table width="100%" cellpadding="0" cellspacing="0">
           ${row('Recipient',     transferData.recipient_name || '—')}
-          ${row('Transfer amount', `${transferData.send_amount} ${transferData.send_currency}`)}
-          ${row('Fee (1.5%)',    transferData.fee != null ? `${transferData.fee} ${transferData.send_currency}` : null)}
+          ${row('Transfer amount', `${Number(transferData.send_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${transferData.send_currency}`)}
+          ${row('Fee',           displayFee)}
           ${row('Exchange rate', transferData.exchange_rate && transferData.recv_currency !== transferData.send_currency
-            ? `1 ${transferData.send_currency} = ${transferData.exchange_rate} ${transferData.recv_currency}` : null)}
-          ${row('Total debited', `${transferData.send_amount} ${transferData.send_currency}`)}
-          ${row('Reference',     ref ? ref + '…' : null)}
-          ${row('Status',        '<span style="color:#16A34A;font-weight:700">Completed ✓</span>')}
+            ? `1 ${transferData.send_currency} = ${Number(transferData.exchange_rate).toFixed(4)} ${transferData.recv_currency}` : null)}
+          ${row('Total charged', `${Number(transferData.send_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${transferData.send_currency}`)}
+          ${row('Reference',     ref || null)}
+          ${row('Delivery',      isCash ? 'Cash Pickup' : transferData.wave_ref ? 'Wave Mobile Money' : 'Mobile Wallet')}
         </table>
 
-        ${transferData.pickup_code
-          ? `<div style="margin-top:20px;background:#FFFBEB;border-left:4px solid #F59E0B;border-radius:8px;padding:14px">
-              <p style="margin:0;font-size:13px;color:#92400E">
-                <strong>Cash pickup code:</strong> ${transferData.pickup_code}
-              </p>
-             </div>`
+        ${isCash
+          ? `<table width="100%" cellpadding="0" cellspacing="0" style="margin-top:24px;background:#FFFBEB;border:1px solid #FCD34D;border-radius:16px">
+              <tr>
+                <td style="padding:24px;text-align:center">
+                  <p style="margin:0 0 8px;font-size:12px;font-weight:700;color:#92400E;text-transform:uppercase;letter-spacing:1px">Cash Pickup Code</p>
+                  <p style="margin:0 0 8px;font-family:'Courier New',monospace;font-size:34px;font-weight:800;color:#B45309;letter-spacing:6px">${transferData.pickup_code}</p>
+                  <p style="margin:0;font-size:13px;color:#92400E">Share this 6-digit code with the recipient so they can collect the cash.</p>
+                </td>
+              </tr>
+             </table>`
           : ''}
-
       </td>
     </tr>
+
+    <!-- Footer -->
     <tr>
-      <td style="background:#F9FAFB;border-radius:0 0 16px 16px;padding:20px;text-align:center">
+      <td style="background:#F9FAFB;padding:24px 32px;text-align:center">
+        <p style="margin:0 0 4px;font-size:13px;color:#6B7280;font-weight:600">Questions about this transfer?</p>
         <p style="margin:0;font-size:12px;color:#9CA3AF">
-          This is an automated receipt from KalipehWallet.<br>
-          Please keep this for your records.
+          This is an automated receipt from Kalipeh Wallet.<br>Please keep it for your records.
         </p>
       </td>
     </tr>
@@ -230,23 +256,41 @@ function buildReceiptHtml(transferData, senderName) {
 }
 
 async function sendReceipt(transferData, senderEmail, senderName) {
-  if (!senderEmail) return
+  if (!senderEmail) return false
 
   const subject = `Transfer Receipt — ${transferData.send_amount} ${transferData.send_currency} sent`
   const html    = buildReceiptHtml(transferData, senderName)
-  const text    = `Transfer Receipt\n\nYou sent ${transferData.send_amount} ${transferData.send_currency} to ${transferData.recipient_name || '—'}.\nFee: ${transferData.fee} ${transferData.send_currency}\nReference: ${transferData.transaction_ref || ''}\n\nKalipehWallet`
+  const text    = [
+    'Kalipeh Wallet — Transfer Receipt',
+    '',
+    `Sender: ${senderName || 'You'}`,
+    `Recipient: ${transferData.recipient_name || '—'}`,
+    `Amount sent: ${Number(transferData.send_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${transferData.send_currency}`,
+    transferData.received_amount && transferData.recv_currency !== transferData.send_currency
+      ? `Recipient gets: ${Number(transferData.received_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${transferData.recv_currency}`
+      : '',
+    `Fee: ${transferData.fee != null ? Number(transferData.fee).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'} ${transferData.send_currency}`,
+    `Reference: ${transferData.transaction_ref || '—'}`,
+    `Delivery: ${transferData.pickup_code ? 'Cash Pickup' : transferData.wave_ref ? 'Wave Mobile Money' : 'Mobile Wallet'}`,
+    transferData.pickup_code ? `Pickup code: ${transferData.pickup_code}` : '',
+    '',
+    'Keep this receipt for your records.',
+    'Kalipeh Wallet',
+  ].filter(Boolean).join('\n')
 
   try {
     // Backend handles SMTP configuration
-    await api.post('email/send', {
+    await api.post(RECEIPT_EMAIL_ENDPOINT, {
       to:      senderEmail,
       subject,
       html,
       text,
     })
+    return true
   } catch (err) {
     const detail = err.response?.data?.detail || err.message || 'Unknown error'
     Toast.show({ type: 'error', text1: 'Receipt email failed', text2: String(detail) })
+    return false
   }
 }
 
@@ -673,6 +717,7 @@ export default function SendMoneyScreen() {
         const agentsRes = await api.get(`transfer/agents?country=${encodeURIComponent(destCountry.name)}`)
         const agents = agentsRes.data?.agents || []
         if (!agents.length) throw new Error(`No cash pickup agents available in ${destCountry.name}`)
+        const pickupCode = generatePickupCode()
         const { data } = await api.post('transfer/cash-pickup', {
           to_phone:          toPhone,
           recipient_name:    resolvedRecipientName || toPhone,
@@ -682,8 +727,9 @@ export default function SendMoneyScreen() {
           agent_id:          agents[0].id,
           description,
           payment_method_id: paymentMethodId,
+          pickup_code:       pickupCode,
         })
-        responseData = data
+        responseData = { ...(data || {}), pickup_code: data?.pickup_code || pickupCode }
 
       } else {
         const { data } = await api.post('transfer/send', {
@@ -713,8 +759,8 @@ export default function SendMoneyScreen() {
       Haptics.success()
       notifySender(enriched)
       notifyRecipient(enriched, toPhone)
-      sendReceipt(enriched, user?.email, user?.full_name)
-      setResult({ ...enriched, sent_at: new Date().toISOString() })
+      const receiptSent = await sendReceipt(enriched, user?.email, user?.full_name)
+      setResult({ ...enriched, sent_at: new Date().toISOString(), receiptEmailSent: receiptSent })
 
     } catch (err) {
       Haptics.error()
@@ -868,6 +914,14 @@ export default function SendMoneyScreen() {
             </View>
           </View>
 
+          {result.pickup_code && (
+            <View style={rc.pickupBox}>
+              <Text style={rc.pickupLabel}>Pickup Code</Text>
+              <Text style={rc.pickupCodeText}>{result.pickup_code}</Text>
+              <Text style={rc.pickupHint}>Show this code to the pickup agent.</Text>
+            </View>
+          )}
+
           {/* Total */}
           <View style={rc.totalSection}>
             <Text style={rc.totalLabel}>Total Charged</Text>
@@ -878,10 +932,27 @@ export default function SendMoneyScreen() {
         {/* Email receipt badge */}
         {user?.email && (
           <View style={rc.emailBadge}>
-            <Mail size={16} color={TEAL} />
-            <Text style={rc.emailText}>
-              Receipt emailed to <Text style={{ fontWeight: '700' }}>{user.email}</Text>
-            </Text>
+            <Mail size={16} color={result.receiptEmailSent ? TEAL : '#DC2626'} />
+            {result.receiptEmailSent ? (
+              <Text style={rc.emailText}>
+                Receipt emailed to <Text style={{ fontWeight: '700' }}>{user.email}</Text>
+              </Text>
+            ) : (
+              <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+                <Text style={[rc.emailText, { color: '#DC2626' }]}>
+                  Receipt email failed.
+                </Text>
+                <TouchableOpacity
+                  onPress={async () => {
+                    const ok = await sendReceipt(result, user.email, user?.full_name)
+                    setResult({ ...result, receiptEmailSent: ok })
+                  }}
+                  activeOpacity={0.75}
+                >
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#4F46E5' }}>Resend</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         )}
 
@@ -2455,6 +2526,37 @@ const rc = StyleSheet.create({
     textAlign: 'right',
     flex: 1,
     marginLeft: 16,
+  },
+
+  pickupBox: {
+    marginHorizontal: 24,
+    marginTop: 16,
+    backgroundColor: '#FFFBEB',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1.5,
+    borderColor: '#FCD34D',
+    alignItems: 'center',
+  },
+  pickupLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#92400E',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 6,
+  },
+  pickupCodeText: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: '#B45309',
+    letterSpacing: 4,
+  },
+  pickupHint: {
+    fontSize: 12,
+    color: '#92400E',
+    marginTop: 8,
+    textAlign: 'center',
   },
 
   totalSection: {
