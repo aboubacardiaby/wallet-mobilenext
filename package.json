@@ -14,7 +14,7 @@
     "@react-navigation/bottom-tabs": "^6.5.20",
     "@react-navigation/native": "^6.1.17",
     "@react-navigation/native-stack": "^6.9.26",
-    "@stripe/stripe-react-native": "0.37.2",
+    "@stripe/stripe-react-native": "0.37.3",
     "@types/react": "~18.2.79",
     "axios": "^1.7.2",
     "expo": "~51.0.28",
@@ -35,6 +35,13 @@
   },
   "devDependencies": {
     "@babel/core": "^7.24.0"
+  },
+  "expo": {
+    "install": {
+      "exclude": [
+        "@stripe/stripe-react-native"
+      ]
+    }
   },
   "private": true
 }

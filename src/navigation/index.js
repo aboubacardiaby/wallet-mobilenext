@@ -26,6 +26,8 @@ import ProfileScreen      from '../screens/ProfileScreen'
 import SendMoneyScreen    from '../screens/SendMoneyScreen'
 import RequestMoneyScreen from '../screens/RequestMoneyScreen'
 import CashScreen         from '../screens/CashScreen'
+import TopUpScreen        from '../screens/TopUpScreen'
+import BankTopUpScreen    from '../screens/BankTopUpScreen'
 import QRScreen           from '../screens/QRScreen'
 import RecipientsScreen   from '../screens/RecipientsScreen'
 import AddRecipientScreen from '../screens/AddRecipientScreen'
@@ -104,6 +106,8 @@ export default function RootNavigator() {
             <Stack.Screen name="SendMoney"      component={SendMoneyScreen} />
             <Stack.Screen name="Main"           component={MainTabs} />
             <Stack.Screen name="RequestMoney"   component={RequestMoneyScreen} />
+            <Stack.Screen name="TopUp"          component={TopUpScreen} />
+            <Stack.Screen name="BankTopUp"      component={BankTopUpScreen} />
             <Stack.Screen name="CashIn"         component={CashScreen} initialParams={{ type: 'in' }} />
             <Stack.Screen name="CashOut"        component={CashScreen} initialParams={{ type: 'out' }} />
             <Stack.Screen name="QR"             component={QRScreen} />

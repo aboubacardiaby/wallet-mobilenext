@@ -95,6 +95,14 @@ export default function DashboardScreen() {
 
   useEffect(() => { fetchWallet(); fetchTxs(); fetchTicker() }, [])
 
+  // This tab stays mounted while other screens open on top of it, so it must refresh when it
+  // regains focus; otherwise a completed top-up leaves the old balance on screen until the
+  // customer pulls to refresh.
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => { fetchWallet(); fetchTxs() })
+    return unsubscribe
+  }, [navigation])
+
   const initials = user?.full_name
     ? user.full_name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
     : (user?.email?.[0] || 'U').toUpperCase()
@@ -221,7 +229,7 @@ export default function DashboardScreen() {
 
             <TouchableOpacity
               style={s.ctaBtn}
-              onPress={() => navigation.navigate('CashIn')}
+              onPress={() => navigation.navigate('TopUp')}
               activeOpacity={0.85}
             >
               <View style={s.ctaBtnIcon}>
